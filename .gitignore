@@ -1,0 +1,10 @@
+# macOS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Local scratch — exports, screenshots, test cards
+/scratch/
+*.local.*
