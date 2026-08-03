@@ -42,13 +42,24 @@ gzipped, base64-encoded assets — React, the fonts, the icon set — from inlin
 `<script type="__bundler/*">` blocks, then swaps the real document in. That is
 why the file is ~7 MB and why it is not meaningfully diffable.
 
-Two things are fetched from the network at runtime, both by design:
+Nothing is fetched from a third party unless you ask for it:
 
-- **Google Fonts**, for the card typefaces — the font picker can pull any family
-  by name, so they can't be baked in ahead of time.
-- **Fediverse instances**, when you import a handle.
+- **Google Fonts** is **off until you switch it on.** The card typefaces live on
+  Google's servers, and requesting one hands Google the visitor's IP, so
+  dropcard asks for nothing until someone opts in under *Style → Card font*.
+  Every stack falls back to a system face, so cards look right either way.
+  Switching it back off removes the stylesheet links and stops any further
+  requests.
+- **Fediverse instances** are contacted only when you import a handle, and only
+  the instance you named. The request goes straight from your browser — nothing
+  proxies it.
 
 Everything else, including React, is inlined and works offline.
+
+The opt-in answer is the one thing kept between visits, under the
+`dropcard:google-fonts` key in `localStorage`. Nothing else is stored, there are
+no cookies, and no analytics of any kind. Cards are rendered and exported
+entirely in the browser — what you type never leaves the page.
 
 ## Local preview
 
