@@ -29,18 +29,13 @@ async function ttf(family, weight) {
   return ttfCache.get(k);
 }
 
-async function buildCard(prefix, job) {
+export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
   const faces = job.faces;
   const PX_W = faces.front.card.w, PX_H = faces.front.card.h;
   const S = LONG_EDGE / Math.max(PX_W, PX_H);
   const CARD_W = PX_W * S, CARD_H = PX_H * S;
 
-  const pf = ProtoFlux(); const D = pf.D;
-  const asset = (cp, f={}) => { const id = pf.nextId();
-    const data = { ID:id, persistent:pf.fd(true), UpdateOrder:pf.fi(0), Enabled:pf.fd(true) };
-    for (const [k,v] of Object.entries(f)) data[k] = pf.fd(v);
-    return { entry:{ Type:pf.typeIndex(cp), Data:data }, id }; };
-  const assets = [], embeds = [];
+  const D = pf.D;
 
   const wanted = new Map();
   for (const s of Object.keys(faces)) for (const L of faces[s].layers) wanted.set(`${L.family}|${L.weight}`, L);
@@ -121,13 +116,33 @@ async function buildCard(prefix, job) {
     pf.component(CP.Grabbable, { Scalable:true }).comp,
     pf.component(CP.BoxCollider, { Size:[D(CARD_W),D(CARD_H),D(COLLIDER_T)], Type:'Static', Mass:D(0.1) }).comp,
   ], [0,0,0], [faceSlot('front', CARD_GAP/2, false), faceSlot('back', -CARD_GAP/2, true)].filter(Boolean),
-     null, pf.rootId);
+     null);
 
-  const r = await pf.exportPackage({ name:`dropcard ${job.template} (${job.content})`, root,
-    assets, embeddedAssets:embeds, outPath:`out/dropcard_${prefix}.resonitepackage`, typeVersions:TV });
-  console.log(`   ${job.template} ${(CARD_W*1000).toFixed(0)}×${(CARD_H*1000).toFixed(0)}mm  ` +
-              `fonts=${fonts.size} embeds=${embeds.length} ${r.ok?'ok':'DANGLING'}`);
+  return { root, CARD_W, CARD_H, S, fonts };
 }
 
-const all = JSON.parse(readFileSync(new URL('./batch-layers.json', import.meta.url),'utf8'));
-for (const [prefix, job] of Object.entries(all)) { console.log(prefix); await buildCard(prefix, job); }
+export { TV, CP, LONG_EDGE, CARD_GAP, COLLIDER_T };
+
+export function newEncoder() {
+  const pf = ProtoFlux();
+  const assets = [], embeds = [];
+  const asset = (cp, f={}) => { const id = pf.nextId();
+    const data = { ID:id, persistent:pf.fd(true), UpdateOrder:pf.fi(0), Enabled:pf.fd(true) };
+    for (const [k,v] of Object.entries(f)) data[k] = pf.fd(v);
+    return { entry:{ Type:pf.typeIndex(cp), Data:data }, id }; };
+  return { pf, asset, assets, embeds };
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const all = JSON.parse(readFileSync(new URL('./batch-layers.json', import.meta.url),'utf8'));
+  for (const [prefix, job] of Object.entries(all)) {
+    console.log(prefix);
+    const { pf, asset, assets, embeds } = newEncoder();
+    const c = await cardRoot(pf, asset, assets, embeds, prefix, job);
+    c.root.ID = pf.rootId;
+    const r = await pf.exportPackage({ name:`dropcard ${job.template} (${job.content})`, root:c.root,
+      assets, embeddedAssets:embeds, outPath:`out/dropcard_${prefix}.resonitepackage`, typeVersions:TV });
+    console.log(`   ${job.template} ${(c.CARD_W*1000).toFixed(0)}×${(c.CARD_H*1000).toFixed(0)}mm  ` +
+                `fonts=${c.fonts.size} embeds=${embeds.length} ${r.ok?'ok':'DANGLING'}`);
+  }
+}
