@@ -1,0 +1,7 @@
+# generated per run — rasters, packages, decodes, deps
+node_modules/
+out/
+*.png
+layers.json
+*_decoded.json
+package-lock.json
