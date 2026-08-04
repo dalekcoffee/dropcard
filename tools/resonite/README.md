@@ -15,6 +15,9 @@ npm install                           # bson, brotli-wasm, jszip, pngjs
 node extract.mjs                      # → bg-*.png, gfx-*.png, layers.json
 node build_layered.mjs                # → out/dropcard_Sample_layered.resonitepackage
 node build_card.mjs                   # → out/dropcard_Sample_baked.resonitepackage
+
+node batch.mjs                        # several templates in one browser session
+node build_batch.mjs                  # → one package per captured template
 ```
 
 `extract.mjs` drives Chromium through Playwright (`/opt/pw-browsers`, preinstalled).
@@ -55,6 +58,16 @@ Each of these cost a round trip to find, so they are written down:
 - **Google Fonts serves woff2 to modern user agents and EOT to an IE one.** Only an old
   Android UA yields a plain `.ttf`. `fetchfont.mjs` checks the magic bytes and throws
   rather than shipping a dead font.
+- **The card is sized from its LONG edge.** Portrait templates render 620x920 rather than
+  1000x625, so scaling from width alone makes them oversized.
+- **The two face plates need a gap of ~0.1mm, not more.** They are separate meshes because
+  `QuadMesh.DualSided` puts both quads in submesh 0 (`implicit operator TriangleSubmesh`),
+  so one material would cover both faces — same texture, back mirrored. `BoxMesh` has the
+  same single-submesh limitation. At 0.8mm you can see daylight between the faces; the grab
+  collider is decoupled and stays thick.
+- **Not every family a card names is on Google Fonts** (templates set system faces like
+  Courier New). `fetchfont.mjs` accepts `format('truetype')` URLs as well as `.ttf` ones and
+  substitutes mono/serif/sans equivalents rather than failing the build.
 - **SVG text cannot become a `TextRenderer`** — the seals lay text around a circle with
   `<textPath>`. Those become their own image layer, never baked into the plate. Cloning one
   out for rastering drops inherited opacity, so the effective alpha rides on the tint.

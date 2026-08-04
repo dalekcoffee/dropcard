@@ -19,7 +19,8 @@ const TYPE_VERSIONS = { [CP.Grabbable]: 2, [CP.BoxCollider]: 1, [CP.QuadMesh]: 1
 
 // True business-card width read too small in VR (owner scaled the prototype to 2,2,2),
 // so ship at 2x. The app renders 1.6:1, so height follows from the width.
-const CARD_W = 0.1712, ASPECT = 1.6, CARD_H = CARD_W / ASPECT, CARD_T = 0.0008;
+const CARD_W = 0.1712, ASPECT = 1.6, CARD_H = CARD_W / ASPECT;
+const CARD_GAP = 0.0001, COLLIDER_T = 0.002;
 
 const pf = ProtoFlux();
 const D = pf.D;
@@ -73,8 +74,8 @@ function faceSlot(f, z, flip) {
 const root = pf.makeSlot('dropcard', [
   pf.component(CP.ObjectRoot, {}).comp,
   pf.component(CP.Grabbable, { Scalable: true }).comp,
-  pf.component(CP.BoxCollider, { Size: [D(CARD_W), D(CARD_H), D(CARD_T)], Type: 'Static', Mass: D(0.1) }).comp,
-], [0, 0, 0], [faceSlot(front, CARD_T / 2, false), faceSlot(back, -CARD_T / 2, true)], null, pf.rootId);
+  pf.component(CP.BoxCollider, { Size: [D(CARD_W), D(CARD_H), D(COLLIDER_T)], Type: 'Static', Mass: D(0.1) }).comp,
+], [0, 0, 0], [faceSlot(front, CARD_GAP / 2, false), faceSlot(back, -CARD_GAP / 2, true)], null, pf.rootId);
 
 const res = await pf.exportPackage({
   name: 'dropcard Sample',

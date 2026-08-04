@@ -17,7 +17,12 @@ const CP = {
 };
 const TYPE_VERSIONS = { [CP.Grabbable]:2, [CP.BoxCollider]:1, [CP.QuadMesh]:1, [CP.TextRenderer]:5 };
 
-const CARD_W = 0.1712, CARD_T = 0.0008;
+const CARD_W = 0.1712;
+// The two face plates only need enough separation to not z-fight — at 0.8mm you could
+// see daylight between them at the card's edge. The grab collider stays thick enough to
+// be a comfortable target; it is invisible, so it costs nothing.
+const CARD_GAP = 0.0001;    // 0.1mm between the plates
+const COLLIDER_T = 0.002;   // 2mm grab volume
 const faces = JSON.parse(readFileSync(new URL('./layers.json', import.meta.url),'utf8'));
 const PX_W = faces.front.card.w, PX_H = faces.front.card.h;
 const S = CARD_W / PX_W;                 // px → metres, applied once on the Text root's scale
@@ -154,8 +159,8 @@ function faceSlot(side, z, flip) {
 const root = pf.makeSlot('dropcard', [
   pf.component(CP.ObjectRoot, {}).comp,
   pf.component(CP.Grabbable, { Scalable:true }).comp,
-  pf.component(CP.BoxCollider, { Size:[D(CARD_W),D(CARD_H),D(CARD_T)], Type:'Static', Mass:D(0.1) }).comp,
-], [0,0,0], [faceSlot('front', CARD_T/2, false), faceSlot('back', -CARD_T/2, true)], null, pf.rootId);
+  pf.component(CP.BoxCollider, { Size:[D(CARD_W),D(CARD_H),D(COLLIDER_T)], Type:'Static', Mass:D(0.1) }).comp,
+], [0,0,0], [faceSlot('front', CARD_GAP/2, false), faceSlot('back', -CARD_GAP/2, true)], null, pf.rootId);
 
 await pf.exportPackage({ name:'dropcard Sample (layered)', root, assets, embeddedAssets:embeds,
   outPath:'out/dropcard_Sample_layered.resonitepackage', typeVersions:TYPE_VERSIONS });
