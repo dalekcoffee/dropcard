@@ -64,12 +64,21 @@ Each of these cost a round trip to find, so they are written down:
 - **`RenderQueue` defaults to −1 (auto)**, which puts plates and text in the same queue and
   lets view angle decide the winner. Pinned here: plates 3000, graphics 3050, text 3100.
 - **`Uri` fields serialise as a plain string with an `@` prefix** — `"@https://…"`.
-- **`GlobalReference<T>` vs `ElementSource<T>` is not a style choice.** `GlobalReference` is
-  the EXTERNAL-binding handle ("bind me in-world") and imports unbound; `ElementSource<T>`
-  reads an element that lives in the same saved hierarchy. Feeding `DuplicateSlot.Template`
-  a `GlobalReference<Slot>` gives a node with nothing to clone, and the whole thing silently
-  does nothing. Classpath quirk: `…CoreNodes.ElementSource<…>` with a DOUBLED
-  `FrooxEngine.FrooxEngine`, and the field is `Source`, not `Reference`.
+- **Reading a scene element into a graph takes a PROXY PAIR, on one slot.**
+  `ChangeableSource<E,T>.Source` is a `GlobalRef<E>` — it points at an
+  `IGlobalValueProxy`, *not* at the element. So `DuplicateSlot.Template` needs:
+
+  ```
+  slot "…source"
+    ├─ GlobalReference<Slot>   Reference = the target slot
+    └─ ElementSource<Slot>     Source    = the GlobalReference above
+  DuplicateSlot.Template       = the ElementSource
+  ```
+
+  Aim `ElementSource.Source` straight at the slot and it imports unbound — in-world the
+  node shows as **"ChangeableSource"** with an empty `On: ()`, and nothing clones. Same
+  shape as the `ValueFieldDrive` + `Proxy` pair. Classpath quirk: `…CoreNodes.ElementSource<…>`
+  carries a DOUBLED `FrooxEngine.FrooxEngine`, and its field is `Source`, not `Reference`.
 - **An invalid ProtoFlux group stays built but dead**, with no per-node error — one bad field
   kills every node in the connected component. Bisect with a minimal graph rather than
   guessing. Groups derive from wiring; there is no group entity in the file format.

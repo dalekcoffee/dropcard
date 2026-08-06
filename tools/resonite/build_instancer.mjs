@@ -28,6 +28,7 @@ const N = {
   InBodyNode:    PB + 'ValueInput<[Renderite.Shared]Renderite.Shared.BodyNode>',
   InBool:        PB + 'ValueInput<bool>',
   RefButton:     GREF(`${FE}IButton`),
+  RefSlot:       GREF(`${FE}Slot`),
   ElemSlot:      '[ProtoFluxBindings]FrooxEngine.FrooxEngine.ProtoFlux.CoreNodes.ElementSource<[FrooxEngine]FrooxEngine.Slot>',
 };
 const TOUCH_BUTTON = FE + 'TouchButton';
@@ -126,7 +127,8 @@ const refBtn  = fnode(N.RefButton,  { Reference: touch.id }, 'Button ref');
 const evt     = fnode(N.ButtonEvents, { Button:refBtn.id, Pressed:null, Pressing:null,
   Released:null, HoverEnter:null, HoverStay:null, HoverLeave:null,
   Source:null, GlobalPoint:null, LocalPoint:null, NormalizedPoint:null }, 'ButtonEvents');
-const refTpl  = fnode(N.ElemSlot, { Source: card.root.ID }, 'Card template source');
+const tplProxy = fnode(N.RefSlot,  { Reference: card.root.ID }, 'Card template source');
+const refTpl   = fnode(N.ElemSlot, { Source: tplProxy.id },     'Card template source');
 const dup     = fnode(N.DuplicateSlot, { Next:null, Template:refTpl.id, OverrideParent:null, Duplicate:null }, 'DuplicateSlot');
 const setPar  = fnode(N.SetParent, { Next:null, Instance:dup.f.Duplicate, NewParent:null, PreserveGlobalPosition:null }, 'SetParent');
 const trueIn  = fnode(N.InBool, { Value:true }, 'true');
@@ -173,12 +175,13 @@ const AT = {
   'RightHand (fixed)':      [-0.44,  0.15],
   'pick hand':              [-0.20,  0.15], 'hand slot':         [ 0.04,  0.15],
 };
+const grouped = new Map();
+for (const n of nodes) {
+  if (!AT[n.name]) throw new Error(`no pretty-flux placement for node "${n.name}"`);
+  (grouped.get(n.name) ?? grouped.set(n.name, []).get(n.name)).push(n);
+}
 const fluxSlot = pf.makeSlot('ProtoFlux', [], [0, -0.55, 0],
-  nodes.map((n) => {
-    const at = AT[n.name];
-    if (!at) throw new Error(`no pretty-flux placement for node "${n.name}"`);
-    return pf.makeSlot(n.name, [n.comp], [at[0], at[1], 0]);
-  }));
+  [...grouped].map(([name, ns]) => pf.makeSlot(name, ns.map(n => n.comp), [AT[name][0], AT[name][1], 0])));
 
 // No Grabbable on the test rig ON PURPOSE. Pointing a laser at a grabbable object and
 // clicking grabs it, which would mask the touch we're trying to test. Move it with the
