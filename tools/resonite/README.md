@@ -43,9 +43,20 @@ ones added later, with no per-template code.
 
 Each of these cost a round trip to find, so they are written down:
 
-- **`QuadMesh.Facing = Rotation * float3.Backward`.** An identity rotation points the quad
-  at −Z and it reads mirrored. `[0,1,0,0]` is the engine's own v1 convention. Anything
-  parented under a face needs the same treatment or it renders backwards *and* X-mirrored.
+- **Facing. Get this wrong and things ship mirrored — it has happened twice.**
+  `QuadMesh.Facing = Rotation * float3.Backward`, so an identity rotation points a quad
+  at −Z and it reads mirrored; `[0,1,0,0]` (the engine's own v1 convention) faces +Z.
+  TextRenderer behaves the same way. The rule, in full:
+
+  > An element shows its front to +Z only if its own rotation **times every ancestor's**
+  > rotation is 180° about Y. Position is expressed in the PARENT's frame and is *not*
+  > affected by the element's own rotation.
+
+  Which gives two opposite cases, and mixing them up is the trap:
+  - element carrying its **own** `[0,1,0,0]` → its local z must be **positive** to sit toward
+    the viewer (the button label).
+  - element **under a parent** carrying `[0,1,0,0]` → its local z must be **negative**,
+    because the parent's rotation negates it (the card's text/graphics/links).
 - **`TextRenderer.Size` is multiplied by `0.1` internally** (`TextRenderer.cs`), so an
   em-height of N px means `Size = N * 10`.
 - **`TextUnlitMaterial.BackgroundColor` defaults to opaque black.** Leave it unset and every
