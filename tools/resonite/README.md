@@ -81,6 +81,19 @@ on the INSTANCER (never the card), detect the owner and bake the value in once:
 GetActiveUser / GetUserFromComponent -> UserUserID -> write into the template's ContactLink.UserId
 ```
 
+The write node is **`WriteObjectToGlobal<string>`** — a real one-shot write, not a drive:
+
+```csharp
+public readonly GlobalRef<T> Global;   // proxy pointing at ContactLink.UserId
+public ObjectInput<T> Value;
+protected override IOperation Run(C ctx) { if (Global.Write(Value.Evaluate(ctx), ctx)) … }
+```
+
+`ObjectWrite<T>` is the sibling that writes a graph variable rather than a scene field, and
+`DataModelObjectFieldStore<T>` is a graph variable of its own (it holds its own `Value`), so
+neither is the one. Gate the write with `FireOnTrue` on "owner is known" so it fires on the
+edge and never rewrites.
+
 `UserUserID` gives the real `U-…` id, not `UserUsername` — a username can be changed while
 the id stays put, so `"U-" + username` would be wrong. Write it, do **not** drive it: a drive
 re-evaluates, so a different user grabbing the card would rewrite the owner. Doing it on the

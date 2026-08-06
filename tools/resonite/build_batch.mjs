@@ -11,13 +11,15 @@ const FE = '[FrooxEngine]FrooxEngine.';
 const CP = { ObjectRoot:FE+'ObjectRoot', Grabbable:FE+'Grabbable', BoxCollider:FE+'BoxCollider',
   QuadMesh:FE+'QuadMesh', MeshRenderer:FE+'MeshRenderer', Unlit:FE+'UnlitMaterial',
   Hyperlink:FE+'Hyperlink', StaticTexture2D:FE+'StaticTexture2D', TextRenderer:FE+'TextRenderer',
-  TextUnlit:FE+'TextUnlitMaterial', StaticFont:FE+'StaticFont' };
+  TextUnlit:FE+'TextUnlitMaterial', StaticFont:FE+'StaticFont',
+  ContactLink:FE+'ContactLink', TouchButton:FE+'TouchButton' };
 const TV = { [CP.Grabbable]:2, [CP.BoxCollider]:1, [CP.QuadMesh]:1, [CP.TextRenderer]:5 };
 
 const LONG_EDGE = 0.1712;   // the card's long side, whatever its orientation
 const CARD_GAP = 0.0001, COLLIDER_T = 0.002;
 const Q_PLATE = 3000, Q_GFX = 3050, Q_TEXT = 3100;
 const TEXT_Z = 6, GFX_Z = 3, LINK_Z = 4, LINK_DEPTH = 8;
+const CONTACT_Z = 5, CONTACT_DEPTH = 8;
 const SIZE_GAIN = 10, LH_BASIS = 0.8 / 1.2;
 const ALIGN = { left:'Left', center:'Center', right:'Right', justify:'Justify', start:'Left', end:'Right' };
 const slug = t => (t.replace(/\s+/g,' ').trim().slice(0,24) || 'Text');
@@ -96,6 +98,37 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
       { w:g.w, h:g.h, tint:[1,1,1,g.alpha ?? 1], queue:Q_GFX }),
     [ (g.x+g.w/2)-PX_W/2, -((g.y+g.h/2)-PX_H/2), -GFX_Z ]);
 
+  // Add-contact lives on the name and the profile picture rather than a separate button:
+  // no template needs a reserved spot, and it cannot cover the social chips. Identified by
+  // VALUE (the name field's text, the avatar's <img>) so no template markers are required.
+  //
+  // TouchButton is the slot's ITouchable — two ITouchables cannot share a slot, since
+  // RaycastTouchSource resolves a single GetComponentInParentsUntilBlock — but ContactLink
+  // does not need to be one: TouchButton dispatches its press to every IButtonPressReceiver
+  // on its own slot (TouchButton.cs:186), and ContactLink is one. UserId is left EMPTY here;
+  // the instancer bakes it in once it knows who owns the card.
+  const contactTargets = (side) => {
+    const f = faces[side], out = [];
+    const names = [job.fields?.Name, job.fields?.Nickname]
+      .filter(Boolean).map(v => v.trim().toLowerCase());
+    if (names.length) {
+      for (const L of f.layers || []) {
+        const t = L.text.trim().toLowerCase();
+        if (names.includes(t)) out.push({ ...L, what: 'name' });
+      }
+    }
+    for (const g of f.gfx || []) if (g.isAvatar) out.push({ ...g, what: 'avatar' });
+    return out;
+  };
+
+  const contactSlot = (t, i) => pf.makeSlot(`${String(i+1).padStart(2,'0')} add contact — ${t.what}`,
+    [ pf.component(CP.BoxCollider, { Size:[D(t.w),D(t.h),D(CONTACT_DEPTH)], Type:'Static',
+        Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false }).comp,
+      pf.component(CP.TouchButton, { AcceptPhysicalTouch:true, AcceptRemoteTouch:true,
+        AcceptOutOfSightTouch:false }).comp,
+      pf.component(CP.ContactLink, { UserId:'' }).comp ],
+    [ (t.x+t.w/2)-PX_W/2, -((t.y+t.h/2)-PX_H/2), -CONTACT_Z ]);
+
   function faceSlot(side, z, flip) {
     const f = faces[side]; if (!f) return null;
     const px = (name, kids) => { const r = pf.makeSlot(name, [], [0,0,0], kids);
@@ -106,6 +139,8 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
     if (f.gfx?.length)   kids.push(px('Graphics', f.gfx.map(gfxSlot(side))));
     if (f.layers.length) kids.push(px('Text', f.layers.map(textSlot)));
     if (f.links?.length) kids.push(px('Links', f.links.map(linkSlot)));
+    const ct = contactTargets(side);
+    if (ct.length) kids.push(px('Add contact', ct.map(contactSlot)));
     const s = pf.makeSlot(side==='front'?'Front':'Back', [], [0,0,z], kids);
     if (flip) s.Rotation.Data=[D(0),D(1),D(0),D(0)];
     return s;

@@ -68,6 +68,17 @@ for (const job of JOBS) {
   await p.waitForTimeout(1400);
   const touched = await applyContent(job.content);
 
+  // read back what the card is actually showing, so the builder can identify the name run
+  const fieldVals = await p.evaluate(() => {
+    const out = {};
+    document.querySelectorAll('input, textarea').forEach(e => {
+      if (e.type === 'file' || e.type === 'color' || e.offsetParent === null) return;
+      const lab = (e.closest('.field')?.querySelector('label')?.textContent || '').trim();
+      if (lab && e.value) out[lab] = e.value;
+    });
+    return out;
+  });
+
   const faces = {};
   for (const side of ['front','back']) {
     const id = `oshi-${side}-node`;
@@ -134,7 +145,7 @@ for (const job of JOBS) {
     await p.waitForTimeout(250);
     faces[side]=data;
   }
-  all[job.prefix]={ ...job, faces };
+  all[job.prefix]={ ...job, faces, fields:fieldVals };
   const f=faces.front, k=faces.back;
   console.log(`${job.prefix.padEnd(16)} ${job.template.padEnd(13)} ${job.content.padEnd(6)} fields=${String(touched).padStart(2)}  ` +
               `card=${f.card.w}x${f.card.h} front(${f.layers.length}t/${f.gfx.length}g) back(${k?k.layers.length:0}t/${k?k.links.length:0}l)`);
