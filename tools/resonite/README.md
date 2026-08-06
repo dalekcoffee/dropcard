@@ -64,6 +64,15 @@ Each of these cost a round trip to find, so they are written down:
 - **`RenderQueue` defaults to −1 (auto)**, which puts plates and text in the same queue and
   lets view angle decide the winner. Pinned here: plates 3000, graphics 3050, text 3100.
 - **`Uri` fields serialise as a plain string with an `@` prefix** — `"@https://…"`.
+- **`GlobalReference<T>` vs `ElementSource<T>` is not a style choice.** `GlobalReference` is
+  the EXTERNAL-binding handle ("bind me in-world") and imports unbound; `ElementSource<T>`
+  reads an element that lives in the same saved hierarchy. Feeding `DuplicateSlot.Template`
+  a `GlobalReference<Slot>` gives a node with nothing to clone, and the whole thing silently
+  does nothing. Classpath quirk: `…CoreNodes.ElementSource<…>` with a DOUBLED
+  `FrooxEngine.FrooxEngine`, and the field is `Source`, not `Reference`.
+- **An invalid ProtoFlux group stays built but dead**, with no per-node error — one bad field
+  kills every node in the connected component. Bisect with a minimal graph rather than
+  guessing. Groups derive from wiring; there is no group entity in the file format.
 - **`Compression.None` does not load.** `DataTreeConverter` throws on it; only LZ4, LZMA and
   Brotli are accepted, so a browser port still needs a real compressor.
 - **Google Fonts serves woff2 to modern user agents and EOT to an IE one.** Only an old

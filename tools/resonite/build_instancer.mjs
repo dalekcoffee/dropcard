@@ -28,7 +28,7 @@ const N = {
   InBodyNode:    PB + 'ValueInput<[Renderite.Shared]Renderite.Shared.BodyNode>',
   InBool:        PB + 'ValueInput<bool>',
   RefButton:     GREF(`${FE}IButton`),
-  RefSlot:       GREF(`${FE}Slot`),
+  ElemSlot:      '[ProtoFluxBindings]FrooxEngine.FrooxEngine.ProtoFlux.CoreNodes.ElementSource<[FrooxEngine]FrooxEngine.Slot>',
 };
 const TOUCH_BUTTON = FE + 'TouchButton';
 
@@ -104,20 +104,29 @@ const label = pf.makeSlot('Label', [pf.component(CARD_CP.TextRenderer, {
   MaskPattern:null, HorizontalAutoSize:false, VerticalAutoSize:false,
   Font:labelFont.id }).comp], [0,0,0.0015]);   // own rotation => POSITIVE z to face out
 label.Rotation.Data = [D(0),D(1),D(0),D(0)];
+// a second label on the far side: no rotation means it faces -Z, so it reads correctly
+// from behind too. A test rig shouldn't depend on which way the import happens to land.
+const labelBack = pf.makeSlot('Label (back)', [pf.component(CARD_CP.TextRenderer, {
+  Text: MINIMAL ? 'TAP  (MINIMAL)' : 'TAP  FOR  A  CARD', ParseRichText:false, NullText:null,
+  Size:D(0.018 * 10), HorizontalAlign:'Center', VerticalAlign:'Middle', AlignmentMode:'Geometric',
+  Color:[D(1),D(1),D(1),D(1),'sRGB'], Materials:pf.list([labelMat.id]), LineHeight:D(0.8),
+  Bounded:true, BoundsSize:[D(BTN_W*0.9),D(BTN_H*0.8)], BoundsAlignment:'MiddleCenter',
+  MaskPattern:null, HorizontalAutoSize:false, VerticalAutoSize:false,
+  Font:labelFont.id }).comp], [0,0,-0.0015]);
 
 const btnCol = pf.component(CARD_CP.BoxCollider, { Size:[D(BTN_W),D(BTN_H),D(0.012)],
   Type:'Static', Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false });
 const touch = pf.component(TOUCH_BUTTON, {
   AcceptPhysicalTouch:true, AcceptRemoteTouch:true, AcceptOutOfSightTouch:false });
 const buttonSlot = pf.makeSlot('Button — press me', [btnCol.comp, touch.comp], [0,0,0],
-  [ slab(faceMat, 0.0005, false, 'Face'), slab(backMat, -0.0005, true, 'Back'), label ]);
+  [ slab(faceMat, 0.0005, false, 'Face'), slab(backMat, -0.0005, true, 'Back'), label, labelBack ]);
 
 // ── the graph ───────────────────────────────────────────────────────────────
 const refBtn  = fnode(N.RefButton,  { Reference: touch.id }, 'Button ref');
 const evt     = fnode(N.ButtonEvents, { Button:refBtn.id, Pressed:null, Pressing:null,
   Released:null, HoverEnter:null, HoverStay:null, HoverLeave:null,
   Source:null, GlobalPoint:null, LocalPoint:null, NormalizedPoint:null }, 'ButtonEvents');
-const refTpl  = fnode(N.RefSlot, { Reference: card.root.ID }, 'Template ref');
+const refTpl  = fnode(N.ElemSlot, { Source: card.root.ID }, 'Card template source');
 const dup     = fnode(N.DuplicateSlot, { Next:null, Template:refTpl.id, OverrideParent:null, Duplicate:null }, 'DuplicateSlot');
 const setPar  = fnode(N.SetParent, { Next:null, Instance:dup.f.Duplicate, NewParent:null, PreserveGlobalPosition:null }, 'SetParent');
 const trueIn  = fnode(N.InBool, { Value:true }, 'true');
@@ -146,8 +155,30 @@ wire(dup,    'Next',      setPar.id);
 wire(setPar, 'NewParent', hand.id);
 wire(setPar, 'Next',      setAct.id);
 
-const fluxSlot = pf.makeSlot('ProtoFlux', [], [0, -0.1, 0],
-  nodes.map((n, i) => pf.makeSlot(n.name, [n.comp], [(i % 5) * 0.12 - 0.24, -Math.floor(i / 5) * 0.1, 0])));
+// pretty-flux §2: laid out deliberately rather than dumped on a grid. Data flows
+// left→right on its own row, the impulse chain runs on a row below it, and every
+// constant/source sits ~0.22 left of the node it feeds. Checked by hand for backward
+// wires (a producer right of its consumer's input port folds the corner).
+// NOT yet run through the §3 autorouter (router.mjs) — no relays are inserted.
+const AT = {
+  'Button ref':             [-1.40, -0.25], 'ButtonEvents':      [-1.16, -0.25],
+  'Card template source':   [-0.92, -0.45], 'DuplicateSlot':     [-0.68, -0.25],
+  'SetParent':              [ 0.28, -0.25], 'true':              [ 0.28, -0.47],
+  'SetSlotActiveSelf':      [ 0.52, -0.25],
+  'LocalUser':              [-1.40,  0.50], 'UserUserRoot':      [-1.16,  0.50],
+  'LeftHandPosition':       [-0.92,  0.64], 'RightHandPosition': [-0.92,  0.36],
+  'Distance to left hand':  [-0.68,  0.64], 'Distance to right hand': [-0.68, 0.36],
+  'left hand closer?':      [-0.44,  0.50],
+  'LeftHand':               [-0.44,  0.22], 'RightHand':         [-0.44,  0.08],
+  'RightHand (fixed)':      [-0.44,  0.15],
+  'pick hand':              [-0.20,  0.15], 'hand slot':         [ 0.04,  0.15],
+};
+const fluxSlot = pf.makeSlot('ProtoFlux', [], [0, -0.55, 0],
+  nodes.map((n) => {
+    const at = AT[n.name];
+    if (!at) throw new Error(`no pretty-flux placement for node "${n.name}"`);
+    return pf.makeSlot(n.name, [n.comp], [at[0], at[1], 0]);
+  }));
 
 // No Grabbable on the test rig ON PURPOSE. Pointing a laser at a grabbable object and
 // clicking grabs it, which would mask the touch we're trying to test. Move it with the
