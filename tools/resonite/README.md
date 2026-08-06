@@ -51,6 +51,42 @@ not compete for one collider: the button's collider carries `TouchButton` (`ITou
 there), while the handle's collider carries only geometry, so pointing at it grabs the whole
 object instead of pressing it.
 
+## Add-contact (design settled, not built yet)
+
+`ContactLink` (`[Category("Cloud")]`, old name `FriendLink`) holds a `Sync<string> UserId`
+and opens the contact panel on touch. `CanTouchInteract` returns `!IsUnderLocalUser`, so it
+refuses its own owner — free correct behaviour.
+
+**The name and the profile picture are the buttons**, with a themed "Add contact" overlay on
+hover. No template edits needed: the exporter finds the name by matching the `name`/
+`nickname` field values against captured text runs, and the avatar by matching the `<img>`
+src. Element colour/font/size are already captured, so the overlay can be drawn in each
+template's own theme.
+
+**Hover and click can share one collider.** Two `ITouchable`s cannot —
+`RaycastTouchSource` takes a single `GetComponentInParentsUntilBlock` — but they don't need
+to. `TouchButton` is the touchable and dispatches its press to every `IButtonPressReceiver`
+**on its own slot** (`TouchButton.cs:186`), and `ContactLink` is one. So:
+
+```
+slot: BoxCollider + TouchButton + ContactLink
+      TouchButton.IsHovering -> drives the overlay's active state
+      TouchButton press      -> ForeachComponent -> ContactLink.Pressed()
+```
+
+**Filling in the UserId without asking anyone to type it.** Leave it blank in the export;
+on the INSTANCER (never the card), detect the owner and bake the value in once:
+
+```
+GetActiveUser / GetUserFromComponent -> UserUserID -> write into the template's ContactLink.UserId
+```
+
+`UserUserID` gives the real `U-…` id, not `UserUsername` — a username can be changed while
+the id stays put, so `"U-" + username` would be wrong. Write it, do **not** drive it: a drive
+re-evaluates, so a different user grabbing the card would rewrite the owner. Doing it on the
+instancer keeps the card itself inert. The remaining open piece is which one-shot write node
+to use.
+
 ## Things the engine does that will bite you
 
 Each of these cost a round trip to find, so they are written down:
