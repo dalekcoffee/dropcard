@@ -65,7 +65,8 @@ if (!job) throw new Error(`no capture named ${prefixArg} in batch-layers.json`);
 const card = await cardRoot(pf, asset, assets, embeds, prefixArg, job);
 card.root.Name.Data = 'Card Template';
 card.root.Active.Data = false;          // the template itself never shows
-card.root.Position.Data = [D(0), D(-0.25), D(0)];
+const PALM_OFFSET = [0, 0, 0];
+card.root.Position.Data = PALM_OFFSET.map(D);
 
 // ── the button ─────────────────────────────────────────────────────────────
 // Deliberately NOT card-shaped: a coloured slab with a printed label, so it reads as
@@ -130,8 +131,9 @@ const evt     = fnode(N.ButtonEvents, { Button:refBtn.id, Pressed:null, Pressing
 const tplProxy = fnode(N.RefSlot,  { Reference: card.root.ID }, 'Card template source');
 const refTpl   = fnode(N.ElemSlot, { Source: tplProxy.id },     'Card template source');
 const dup     = fnode(N.DuplicateSlot, { Next:null, Template:refTpl.id, OverrideParent:null, Duplicate:null }, 'DuplicateSlot');
-const setPar  = fnode(N.SetParent, { Next:null, Instance:dup.f.Duplicate, NewParent:null, PreserveGlobalPosition:null }, 'SetParent');
-const trueIn  = fnode(N.InBool, { Value:true }, 'true');
+const setPar  = fnode(N.SetParent, { Next:null, Instance:dup.f.Duplicate, NewParent:null, PreserveGlobalPosition:null }, 'SetParent');   // wired below
+const trueIn  = fnode(N.InBool, { Value:true },  'true');
+const falseIn = fnode(N.InBool, { Value:false }, 'false');
 const setAct  = fnode(N.SetActive, { Next:null, Instance:dup.f.Duplicate, Active:trueIn.id }, 'SetSlotActiveSelf');
 
 const me = fnode(N.LocalUser, {}, 'LocalUser');
@@ -156,6 +158,7 @@ wire(evt,    'Pressed',   dup.id);
 wire(dup,    'Next',      setPar.id);
 wire(setPar, 'NewParent', hand.id);
 wire(setPar, 'Next',      setAct.id);
+wire(setPar, 'PreserveGlobalPosition', falseIn.id);
 
 // pretty-flux §2: laid out deliberately rather than dumped on a grid. Data flows
 // left→right on its own row, the impulse chain runs on a row below it, and every
@@ -166,7 +169,7 @@ const AT = {
   'Button ref':             [-1.40, -0.25], 'ButtonEvents':      [-1.16, -0.25],
   'Card template source':   [-0.92, -0.45], 'DuplicateSlot':     [-0.68, -0.25],
   'SetParent':              [ 0.28, -0.25], 'true':              [ 0.28, -0.47],
-  'SetSlotActiveSelf':      [ 0.52, -0.25],
+  'SetSlotActiveSelf':      [ 0.52, -0.25], 'false':             [ 0.06, -0.47],
   'LocalUser':              [-1.40,  0.50], 'UserUserRoot':      [-1.16,  0.50],
   'LeftHandPosition':       [-0.92,  0.64], 'RightHandPosition': [-0.92,  0.36],
   'Distance to left hand':  [-0.68,  0.64], 'Distance to right hand': [-0.68, 0.36],

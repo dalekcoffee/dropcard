@@ -64,6 +64,11 @@ Each of these cost a round trip to find, so they are written down:
 - **`RenderQueue` defaults to −1 (auto)**, which puts plates and text in the same queue and
   lets view angle decide the winner. Pinned here: plates 3000, graphics 3050, text 3100.
 - **`Uri` fields serialise as a plain string with an `@` prefix** — `"@https://…"`.
+- **`SetParent.PreserveGlobalPosition` is `[DefaultValue(true)]`.** Leave that input unbound
+  and the reparented slot keeps its WORLD transform — it becomes a child of the hand but
+  never moves, then trails it from across the room. Wire an explicit `ValueInput<bool>` =
+  false, and the copy snaps into the parent's frame; its LOCAL transform then decides where
+  it sits, so the template's own position is the in-hand offset.
 - **Reading a scene element into a graph takes a PROXY PAIR, on one slot.**
   `ChangeableSource<E,T>.Source` is a `GlobalRef<E>` — it points at an
   `IGlobalValueProxy`, *not* at the element. So `DuplicateSlot.Template` needs:
