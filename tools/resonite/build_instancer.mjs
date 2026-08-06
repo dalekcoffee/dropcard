@@ -123,6 +123,24 @@ const touch = pf.component(TOUCH_BUTTON, {
 const buttonSlot = pf.makeSlot('Button — press me', [btnCol.comp, touch.comp], [0,0,0],
   [ slab(faceMat, 0.0005, false, 'Face'), slab(backMat, -0.0005, true, 'Back'), label, labelBack ]);
 
+// Grab handle: a tab down the left edge with a collider but NO touchable, so pointing at it
+// grabs the whole dispenser while the button face still takes clicks.
+const HANDLE_W = 0.022;
+const handleMat = solid([0.09,0.09,0.15]);
+assets.push(handleMat.entry);
+const handleSlab = (z, flip, name) => {
+  const q = pf.component(CARD_CP.QuadMesh, { Rotation:[D(0),D(flip?0:1),D(0),D(flip?1:0)],
+    Size:[D(HANDLE_W),D(BTN_H)], UVOffset:[D(0),D(0)], UVScale:[D(1),D(1)], ScaleUVWithSize:false });
+  const r = pf.component(CARD_CP.MeshRenderer, { Mesh:q.id, Materials:pf.list([handleMat.id]),
+    MaterialPropertyBlocks:[], ShadowCastMode:'On', SortingOrder:new Int32(0) });
+  return pf.makeSlot(name, [q.comp, r.comp], [0,0,z]);
+};
+const handleSlot = pf.makeSlot('Handle — grab here to place it', [
+  pf.component(CARD_CP.BoxCollider, { Size:[D(HANDLE_W),D(BTN_H),D(0.012)], Type:'Static',
+    Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false }).comp,
+], [-(BTN_W/2 + HANDLE_W/2 + 0.004), 0, 0],
+  [ handleSlab(0.0005, false, 'Face'), handleSlab(-0.0005, true, 'Back') ]);
+
 // ── the graph ───────────────────────────────────────────────────────────────
 const refBtn  = fnode(N.RefButton,  { Reference: touch.id }, 'Button ref');
 const evt     = fnode(N.ButtonEvents, { Button:refBtn.id, Pressed:null, Pressing:null,
@@ -186,12 +204,10 @@ for (const n of nodes) {
 const fluxSlot = pf.makeSlot('ProtoFlux', [], [0, -0.55, 0],
   [...grouped].map(([name, ns]) => pf.makeSlot(name, ns.map(n => n.comp), [AT[name][0], AT[name][1], 0])));
 
-// No Grabbable on the test rig ON PURPOSE. Pointing a laser at a grabbable object and
-// clicking grabs it, which would mask the touch we're trying to test. Move it with the
-// inspector/dev tool instead; the shipped badge won't be grabbable either.
 const root = pf.makeSlot('dropcard dispenser', [
   pf.component(CARD_CP.ObjectRoot, {}).comp,
-], [0,0,0], [buttonSlot, card.root, fluxSlot], null, pf.rootId);
+  pf.component(CARD_CP.Grabbable, { Scalable:true }).comp,
+], [0,0,0], [buttonSlot, handleSlot, card.root, fluxSlot], null, pf.rootId);
 
 const r = await pf.exportPackage({ name:`dropcard dispenser${MINIMAL?' minimal':''} (${job.template})`, root,
   assets, embeddedAssets:embeds, outPath:`out/dropcard_dispenser${MINIMAL?'_minimal':''}.resonitepackage`,

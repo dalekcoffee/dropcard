@@ -39,6 +39,18 @@ ones added later, with no per-template code.
   text run as a live `TextRenderer`, and a collider + `Hyperlink` per social chip. Fonts
   are the card's own Google families, fetched as real TTF and bundled into the package.
 
+## Scope
+
+Card + instancer only. There is deliberately **no badge/nameplate auto-mounting and no
+installer UI**: the space above a player's head is already crowded and laid out differently
+for everyone, so anything that placed itself there would fight whatever they already run.
+The dispenser is a grabbable object and the user parents it wherever they want.
+
+That is why the root carries `Grabbable` and a separate **Handle** tab. Grab and click must
+not compete for one collider: the button's collider carries `TouchButton` (`ITouchable` wins
+there), while the handle's collider carries only geometry, so pointing at it grabs the whole
+object instead of pressing it.
+
 ## Things the engine does that will bite you
 
 Each of these cost a round trip to find, so they are written down:
