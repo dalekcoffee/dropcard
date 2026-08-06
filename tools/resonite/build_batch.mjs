@@ -126,7 +126,9 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
         Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false }).comp,
       pf.component(CP.TouchButton, { AcceptPhysicalTouch:true, AcceptRemoteTouch:true,
         AcceptOutOfSightTouch:false }).comp,
-      pf.component(CP.ContactLink, { UserId:'' }).comp ],
+      // Normally empty — the instancer bakes it in once it knows the owner. Set
+      // DROPCARD_USERID to hardcode one for testing the click end to end.
+      pf.component(CP.ContactLink, { UserId: process.env.DROPCARD_USERID || '' }).comp ],
     [ (t.x+t.w/2)-PX_W/2, -((t.y+t.h/2)-PX_H/2), -CONTACT_Z ]);
 
   function faceSlot(side, z, flip) {
