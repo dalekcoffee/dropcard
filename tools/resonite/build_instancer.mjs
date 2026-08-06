@@ -63,7 +63,7 @@ const all = JSON.parse(readFileSync(new URL('./batch-layers.json', import.meta.u
 const job = all[prefixArg];
 if (!job) throw new Error(`no capture named ${prefixArg} in batch-layers.json`);
 const card = await cardRoot(pf, asset, assets, embeds, prefixArg, job);
-card.root.Name.Data = 'Card Template';
+card.root.Name.Data = 'Card Template — its transform IS the in-hand pose';
 card.root.Active.Data = false;          // the template itself never shows
 const PALM_OFFSET = [0, 0, 0];
 card.root.Position.Data = PALM_OFFSET.map(D);
