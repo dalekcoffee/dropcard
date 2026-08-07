@@ -3,6 +3,7 @@
 // out oversized.
 import { ProtoFlux } from './protoflux.mjs';
 import { fetchTTF } from './fetchfont.mjs';
+import { cardTheme, inkFor, renderOverlay } from './icon.mjs';
 import { Int32 } from 'bson';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -12,14 +13,15 @@ const CP = { ObjectRoot:FE+'ObjectRoot', Grabbable:FE+'Grabbable', BoxCollider:F
   QuadMesh:FE+'QuadMesh', MeshRenderer:FE+'MeshRenderer', Unlit:FE+'UnlitMaterial',
   Hyperlink:FE+'Hyperlink', StaticTexture2D:FE+'StaticTexture2D', TextRenderer:FE+'TextRenderer',
   TextUnlit:FE+'TextUnlitMaterial', StaticFont:FE+'StaticFont',
-  ContactLink:FE+'ContactLink', TouchButton:FE+'TouchButton' };
+  ContactLink:FE+'ContactLink', TouchButton:FE+'TouchButton',
+  BoolDriver:FE+'ValueDriver<bool>' };
 const TV = { [CP.Grabbable]:2, [CP.BoxCollider]:1, [CP.QuadMesh]:1, [CP.TextRenderer]:5 };
 
 const LONG_EDGE = 0.1712;   // the card's long side, whatever its orientation
 const CARD_GAP = 0.0001, COLLIDER_T = 0.002;
 const Q_PLATE = 3000, Q_GFX = 3050, Q_TEXT = 3100;
 const TEXT_Z = 6, GFX_Z = 3, LINK_Z = 4, LINK_DEPTH = 4;
-const CONTACT_Z = 5, CONTACT_DEPTH = 4;
+const CONTACT_Z = 5, CONTACT_DEPTH = 4, OVERLAY_Z = 9, Q_OVERLAY = 3150;
 const SHIELD_Z = 1, SHIELD_DEPTH = 1.6, SHIELD_PAD = 2;
 const CONTACT_PADS = [8, 4, 0];   // comfort margin, in card px, largest that still fits
 // Every touch collider stays on its own face's side of the card — it sits Z px in front of
@@ -43,7 +45,7 @@ async function ttf(family, weight) {
   return ttfCache.get(k);
 }
 
-export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
+export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = null) {
   const faces = job.faces;
   const PX_W = faces.front.card.w, PX_H = faces.front.card.h;
   const S = LONG_EDGE / Math.max(PX_W, PX_H);
@@ -193,16 +195,47 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
     // DROPCARD_USERID to hardcode one for testing the click end to end.
     const link = pf.component(CP.ContactLink, { UserId: process.env.DROPCARD_USERID || '' });
     userIdFields.push(link.comp.Data.UserId.ID);
-    return pf.makeSlot(`${String(i+1).padStart(2,'0')} add contact — ${t.what}`,
-      [ pf.component(CP.BoxCollider, { Size:[D(t.w),D(t.h),D(CONTACT_DEPTH)], Type:'Static',
-          Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false }).comp,
-        pf.component(CP.TouchButton, { AcceptPhysicalTouch:true, AcceptRemoteTouch:true,
-          AcceptOutOfSightTouch:false }).comp,
-        link.comp ],
-      [ (t.x+t.w/2)-PX_W/2, -((t.y+t.h/2)-PX_H/2), -CONTACT_Z ]);
+    // IsHovering has to be written out explicitly: this encoder serialises only the fields it
+    // is given, and an unserialised sync member has no ID for the driver to point at.
+    const touch = pf.component(CP.TouchButton, { AcceptPhysicalTouch:true, AcceptRemoteTouch:true,
+      AcceptOutOfSightTouch:false, IsHovering:false, IsPressed:false });
+    const comps = [
+      pf.component(CP.BoxCollider, { Size:[D(t.w),D(t.h),D(CONTACT_DEPTH)], Type:'Static',
+        Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false }).comp,
+      touch.comp, link.comp ];
+    const kids = [];
+    // The overlay is a plain textured quad — no UIX on the card. It sits in front of the
+    // card's own text, starts inactive, and a ValueDriver turns it on straight from
+    // TouchButton.IsHovering: no ProtoFlux, so a card works on its own away from a dispenser.
+    if (t.overlay) {
+      const ov = pf.makeSlot('Add contact (on hover)',
+        texturedQuad(t.overlay, { w:t.w, h:t.h, queue:Q_OVERLAY }), [0, 0, -(OVERLAY_Z-CONTACT_Z)]);
+      ov.Active.Data = false;
+      kids.push(ov);
+      comps.push(pf.component(CP.BoolDriver, { ValueSource: touch.comp.Data.IsHovering.ID,
+        DriveTarget: ov.Active.ID }).comp);
+    }
+    return pf.makeSlot(`${String(i+1).padStart(2,'0')} add contact — ${t.what}`, comps,
+      [ (t.x+t.w/2)-PX_W/2, -((t.y+t.h/2)-PX_H/2), -CONTACT_Z ], kids);
   };
 
   const contacts = { front: contactTargets('front'), back: faces.back ? contactTargets('back') : [] };
+
+  // Hover overlays, in the card's own accent and typeface. Skipped without a browser page —
+  // the targets still work, they just have no label on hover.
+  if (page) {
+    const theme = cardTheme(job, prefix, import.meta.url);
+    const ink = inkFor(theme.accentRGB, theme);
+    const plate = `rgba(${theme.accentRGB.join(',')},0.93)`;
+    // the typeface the card spends the most area in, so the overlay matches its voice
+    const byArea = new Map();
+    for (const f of Object.values(faces)) for (const L of f.layers || [])
+      byArea.set(`${L.family}|${L.weight}`, (byArea.get(`${L.family}|${L.weight}`) ?? 0) + L.w * L.h);
+    const [fam, wgt] = ([...byArea].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'Lexend|500').split('|');
+    const bytes = await ttf(fam, +wgt);
+    for (const side of Object.keys(contacts)) for (const t of contacts[side])
+      t.overlay = await renderOverlay(page, { w:t.w, h:t.h, plate, ink, fontBytes:bytes, family:fam });
+  }
 
   // Standing off from the card does NOT stop a click reaching the far face, and neither does
   // putting plain geometry in the way: RaycastTouchSource walks EVERY hit in distance order
@@ -287,10 +320,13 @@ export function newEncoder() {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const all = JSON.parse(readFileSync(new URL('./batch-layers.json', import.meta.url),'utf8'));
+  const { chromium } = (await import('/opt/node22/lib/node_modules/playwright/index.js')).default;
+  const browser = await chromium.launch();          // one session for every overlay raster
+  const page = await (await browser.newContext({ viewport:{width:600,height:600} })).newPage();
   for (const [prefix, job] of Object.entries(all)) {
     console.log(prefix);
     const { pf, asset, assets, embeds } = newEncoder();
-    const c = await cardRoot(pf, asset, assets, embeds, prefix, job);
+    const c = await cardRoot(pf, asset, assets, embeds, prefix, job, page);
     c.root.ID = pf.rootId;
     const r = await pf.exportPackage({ name:`dropcard ${job.template} (${job.content})`, root:c.root,
       assets, embeddedAssets:embeds, outPath:`out/dropcard_${prefix}.resonitepackage`, typeVersions:TV });
@@ -300,4 +336,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       console.log(`     contact ${t.side.padEnd(5)} ${t.what.padEnd(20)} ` +
                   `${t.w.toFixed(0)}×${t.h.toFixed(0)}px at ${t.x.toFixed(0)},${t.y.toFixed(0)}`);
   }
+  await browser.close();
 }

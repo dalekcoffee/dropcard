@@ -81,7 +81,11 @@ const wire = (n, field, value) => { n.data[field].Data = value; };
 const all = JSON.parse(readFileSync(new URL('./batch-layers.json', import.meta.url),'utf8'));
 const job = all[prefixArg];
 if (!job) throw new Error(`no capture named ${prefixArg} in batch-layers.json`);
-const card = await cardRoot(pf, asset, assets, embeds, prefixArg, job);
+// one browser for the whole build: the card's hover overlays and the button face
+const browser = await chromium.launch();
+const page = await (await browser.newContext({ viewport:{width:600,height:600},
+  deviceScaleFactor:1 })).newPage();
+const card = await cardRoot(pf, asset, assets, embeds, prefixArg, job, page);
 card.root.Name.Data = 'Card Template — its transform IS the in-hand pose';
 card.root.Active.Data = false;          // the template itself never shows
 const PALM_OFFSET = [0, 0, 0];
@@ -102,9 +106,6 @@ const ink = (!OPT['icon-color'] || OPT['icon-color'] === 'theme')
   : OPT['icon-color'];
 const iconFile = resolveIcon(OPT.icon ?? 'auto', job);
 
-const browser = await chromium.launch();
-const page = await (await browser.newContext({ viewport:{width:600,height:600},
-  deviceScaleFactor:1 })).newPage();
 const facePNG = await renderButtonFace(page, { iconFile, size:512, ink, backing,
   backingColor, dir:import.meta.url });
 await browser.close();

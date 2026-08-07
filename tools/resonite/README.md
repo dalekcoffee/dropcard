@@ -90,14 +90,14 @@ weight for free.
 These are the options the app's export panel is meant to offer, which is why they live in
 `icon.mjs` rather than being baked into the builder.
 
-## Add-contact (built, except the hover overlay)
+## Add-contact
 
 `ContactLink` (`[Category("Cloud")]`, old name `FriendLink`) holds a `Sync<string> UserId`
 and opens the contact panel on touch. `CanTouchInteract` returns `!IsUnderLocalUser`, so it
 refuses its own owner — free correct behaviour.
 
-**The name and the profile picture are the buttons.** The themed "Add contact" hover overlay
-is the one piece still to build. No template edits needed: the exporter finds the name by matching the `name`/
+**The name and the profile picture are the buttons**, with a themed "Add contact" overlay on
+hover. No template edits needed: the exporter finds the name by matching the `name`/
 `nickname` field values against captured text runs, and the avatar by matching the `<img>`
 src. Element colour/font/size are already captured, so the overlay can be drawn in each
 template's own theme.
@@ -114,10 +114,30 @@ to. `TouchButton` is the touchable and dispatches its press to every `IButtonPre
 **on its own slot** (`TouchButton.cs:186`), and `ContactLink` is one. So:
 
 ```
-slot: BoxCollider + TouchButton + ContactLink
-      TouchButton.IsHovering -> drives the overlay's active state
-      TouchButton press      -> ForeachComponent -> ContactLink.Pressed()
+slot: BoxCollider + TouchButton + ContactLink + ValueDriver<bool>
+      ValueDriver.ValueSource = TouchButton.IsHovering  ->  DriveTarget = overlay slot .Active
+      TouchButton press       -> ForeachComponent -> ContactLink.Pressed()
+  └─ "Add contact (on hover)"   a textured quad, Active=false, 9px proud of the face
 ```
+
+The overlay is **a plain textured quad and a `ValueDriver<bool>`, no ProtoFlux** — a card has
+to work on its own, sitting on a shelf away from any dispenser. `ValueDriver` points its
+`ValueSource` straight at the `IsHovering` field (it is an ordinary component, not a flux node,
+so it needs no proxy pair) and its `DriveTarget` at the overlay slot's `Active` field.
+
+`IsHovering` has to be written into the export **explicitly**: this encoder serialises only the
+fields it is handed, and a sync member with no serialised entry has no ID for the driver to
+point at.
+
+Each overlay is rastered at its target's own aspect, in the card's accent at 93% and the
+typeface the card spends the most area in, so it reads as part of the template. On a squarish
+target — the avatar frame — the label is split across lines explicitly rather than left to
+wrap, so the measuring pass sees the same layout the final render uses; one line there shrinks
+to about a third the size.
+
+Note `IsHovering` is a **synced** field, so the overlay shows to everyone, not only the person
+hovering. The local-only alternative is `TouchButton`'s `LocalHover*` C# events, which are
+reachable only from ProtoFlux — and that would put a graph on every card.
 
 ## Baking in the UserId (built)
 

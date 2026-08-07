@@ -103,6 +103,42 @@ async function draw(page, { svg, size, radius, plate, boxFrac }) {
   return page.locator('#dc-btn').screenshot({ omitBackground: true });
 }
 
+// The hover overlay that covers an add-contact target. Rendered at the target's own aspect
+// so the quad never stretches it, in the card's accent and its own bundled typeface, so it
+// reads as part of the template rather than as a system tooltip.
+export async function renderOverlay(page, { w, h, text = 'Add contact', plate, ink, fontBytes, family }) {
+  const scale = 512 / Math.max(w, h);
+  const W = Math.round(w * scale), H = Math.round(h * scale);
+  const radius = Math.round(Math.min(W, H) * 0.16);
+  const font = fontBytes
+    ? `@font-face{font-family:"dc";src:url(data:font/ttf;base64,${fontBytes.toString('base64')}) format("truetype")}`
+    : '';
+  const stack = fontBytes ? `"dc", ${family || 'sans-serif'}` : (family || 'sans-serif');
+
+  // On a squarish target — the avatar frame — one line has to shrink to nothing to fit the
+  // width. Break it across lines instead, explicitly rather than by letting it wrap, so the
+  // measuring pass sees exactly the layout the final render will use.
+  const safe = text.replace(/[<&]/g, c => c === '<' ? '&lt;' : '&amp;');
+  const body = (w / h < 2.2) ? safe.split(/\s+/).join('<br>') : safe;
+
+  const html = (size) => `<style>${font}
+    body{margin:0;background:transparent}
+    #dc-ov{width:${W}px;height:${H}px;border-radius:${radius}px;background:${plate};
+      display:flex;align-items:center;justify-content:center;box-sizing:border-box;
+      padding:${Math.round(Math.min(W, H) * 0.1)}px}
+    #dc-t{font-family:${stack};font-size:${size}px;line-height:1.15;color:${ink};
+      white-space:nowrap;text-align:center;letter-spacing:0.01em}</style>
+    <div id="dc-ov"><span id="dc-t">${body}</span></div>`;
+
+  // one measuring pass, because the targets range from a wide name band to a square avatar
+  await page.setContent(html(100));
+  const fit = await page.evaluate(() => { const o = document.getElementById('dc-ov'), t = document.getElementById('dc-t');
+    const cs = getComputedStyle(o), pad = parseFloat(cs.padding) * 2;
+    return Math.min((o.clientWidth - pad) / t.offsetWidth, (o.clientHeight - pad) / t.offsetHeight); });
+  await page.setContent(html(Math.max(8, Math.floor(100 * fit))));
+  return page.locator('#dc-ov').screenshot({ omitBackground: true });
+}
+
 export async function renderButtonFace(page, { iconFile, size = 512, ink, backing, backingColor, dir }) {
   let svg = readFileSync(new URL(`./icons/${iconFile}`, dir), 'utf8');
   svg = svg.replace(/<\?xml[^>]*\?>/, '').replace(/fill="#000000"/g, `fill="${ink}"`)
