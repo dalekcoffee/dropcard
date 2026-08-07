@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { Int32 } from 'bson';
 import pkg from '/opt/node22/lib/node_modules/playwright/index.js'; const { chromium } = pkg;
 import { cardRoot, newEncoder, TV, CP as CARD_CP } from './build_batch.mjs';
-import { cardTheme, inkFor, resolveIcon, renderButtonFace } from './icon.mjs';
+import { cardTheme, inkFor, resolveIcon, renderButtonFace, BACKINGS } from './icon.mjs';
 
 const FE = '[FrooxEngine]FrooxEngine.';
 const PB = '[ProtoFluxBindings]FrooxEngine.ProtoFlux.Runtimes.Execution.Nodes.';
@@ -81,8 +81,9 @@ card.root.Position.Data = PALM_OFFSET.map(D);
 // reads as something to press rather than as another card lying around. Every choice here
 // is meant to become an export option in the app, so none of it is hardcoded — see icon.mjs.
 const theme = cardTheme(job, prefixArg, import.meta.url);
-const backing = OPT.backing ?? 'square';                       // square | pill | none
-if (!['square','pill','none'].includes(backing)) throw new Error(`unknown backing "${backing}"`);
+const backing = OPT.backing ?? 'rounded';        // rounded | square | circle | none
+if (!BACKINGS[backing]) throw new Error(
+  `unknown backing "${backing}" — one of ${Object.keys(BACKINGS).join(', ')}`);
 const backingColor = (!OPT['backing-color'] || OPT['backing-color'] === 'theme')
   ? theme.accent : OPT['backing-color'];
 const ink = (!OPT['icon-color'] || OPT['icon-color'] === 'theme')
@@ -103,9 +104,14 @@ const faceTex = asset(CARD_CP.StaticTexture2D, { URL:`@packdb:///${faceHash}`, U
   DirectLoad:false, ForceExactVariant:false, PreferredProfile:'sRGB', MipMapBias:D(0),
   IsNormalMap:false, WrapModeU:'Clamp', WrapModeV:'Clamp', PowerOfTwoAlignThreshold:D(0.05),
   CrunchCompressed:false, MipMaps:true, KeepOriginalMipMaps:false, MipMapFilter:'Box', Readable:false });
+// Queue 3000, not 2000. Anything under 2500 is opaque, and the engine's screen-space passes
+// — light shafts, bloom occlusion — build their depth from the opaque queue. An alpha-blended
+// quad in there writes depth across its WHOLE rectangle, cut-away corners included, so the
+// sun got occluded by the parts of the button that are not there and ghosted a second copy of
+// itself at each corner. The card plates have always been at 3000 for the same reason.
 const faceMat = asset(CARD_CP.Unlit, { TintColor:[D(1),D(1),D(1),D(1),'sRGB'], Texture:faceTex.id,
   BlendMode:'Alpha', AlphaCutoff:D(0.5), UseVertexColors:false, ZWrite:'On',
-  RenderQueue:new Int32(2000) });
+  RenderQueue:new Int32(3000) });
 assets.push(faceTex.entry, faceMat.entry);
 embeds.push({ hash:faceHash, bytes:facePNG });
 

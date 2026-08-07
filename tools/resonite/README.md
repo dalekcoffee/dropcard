@@ -66,11 +66,12 @@ rasterised through the same browser that renders the cards. All of it is optiona
 
 ```sh
 node build_instancer.mjs info-ticket \
-  --icon=landscape|vertical|auto  --backing=square|pill|none \
+  --icon=landscape|vertical|auto  --backing=rounded|square|circle|none \
   --backing-color=#7755cc|theme   --icon-color=#ffffff|theme
 ```
 
-`auto` follows the card's orientation, and `theme` reads the colours back out of the card
+`rounded` is the default and `square` means square — no corners taken off. `auto` follows
+the card's orientation, and `theme` reads the colours back out of the card
 itself — no template declares them. The paper colour is the commonest opaque colour in the
 plate raster; the accent is the most saturated colour the card spends real area on, with a
 brightness floor so a near-black like `#110000` (fully saturated, and just ink) cannot win,
@@ -78,6 +79,13 @@ and printed bands beating text because a template's accent is usually a filled a
 is whichever of the card's paper, white, or near-black clears 3.5:1 on the chosen backing —
 a themed button nobody can read is not on theme. `--backing=none` leaves the icon alone with
 no plate, and picks its ink against the card's paper.
+
+The icon is sized by **measuring its ink**, not by padding its box. The landscape badge fills
+its viewBox edge to edge while the diagonal one is a diamond inscribed in the same square, so
+an identical box leaves the diagonal one visibly smaller — most obviously in a circle, where
+it lost about 12% of the radius. `renderButtonFace` draws the icon once with no backing, finds
+how far the ink reaches, and scales to a common target. Any icon added later gets the same
+weight for free.
 
 These are the options the app's export panel is meant to offer, which is why they live in
 `icon.mjs` rather than being baked into the builder.
@@ -161,6 +169,12 @@ Each of these cost a round trip to find, so they are written down:
   glyph gets a black box behind it.
 - **`RenderQueue` defaults to −1 (auto)**, which puts plates and text in the same queue and
   lets view angle decide the winner. Pinned here: plates 3000, graphics 3050, text 3100.
+- **Anything alpha-blended belongs at 3000+, never in the opaque queue.** Under 2500 is
+  opaque, and the engine's screen-space passes build their depth from the opaque queue, so an
+  alpha-blended quad down there writes depth across its WHOLE rectangle — cut-away corners
+  included. The sun then reads as occluded by the parts of the object that are not there and
+  ghosts a copy of itself at every transparent edge. It looks like god rays and it is a queue
+  number. The dispenser's button face was at 2000 and did exactly this.
 - **`Uri` fields serialise as a plain string with an `@` prefix** — `"@https://…"`.
 - **`SetParent.PreserveGlobalPosition` is `[DefaultValue(true)]`.** Leave that input unbound
   and the reparented slot keeps its WORLD transform — it becomes a child of the hand but

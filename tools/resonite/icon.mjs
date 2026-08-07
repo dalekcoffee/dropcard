@@ -4,7 +4,7 @@
 // export options rather than staying hardcoded here.
 //
 //   icon     landscape | vertical | auto   (auto follows the card's orientation)
-//   backing  square    | pill     | none   (none = the icon alone, no plate behind it)
+//   backing  rounded | square | circle | none   (none = the icon alone, no plate behind it)
 //   colours  a #rrggbb, or 'theme' to take them from the card
 //
 // Everything is rasterised in the browser that is already open for the capture, so the SVG
@@ -73,22 +73,55 @@ export function resolveIcon(which, job) {
 }
 
 // Rasterise backing + icon to a square PNG. `page` is an already-open Playwright page.
-export async function renderButtonFace(page, { iconFile, size = 512, ink, backing, backingColor, dir }) {
-  let svg = readFileSync(new URL(`./icons/${iconFile}`, dir), 'utf8');
-  svg = svg.replace(/<\?xml[^>]*\?>/, '').replace(/fill="#000000"/g, `fill="${ink}"`)
-           .replace(/(width|height)="\d+px"/g, '');
-  const radius = backing === 'pill' ? '50%' : backing === 'square' ? `${Math.round(size * 0.22)}px` : '0';
-  const plate = backing === 'none' ? 'transparent' : backingColor;
-  const pad = backing === 'none' ? 0.02 : backing === 'pill' ? 0.22 : 0.18;
-  const inset = Math.round(size * pad);
+export const BACKINGS = {
+  // radius as a fraction of the face, and how far the icon insets from the backing's edge.
+  // A circle takes the LEAST inset, not the most: the icons are widest across their middle,
+  // which is exactly where a circle is furthest out, so they sit in it comfortably.
+  rounded: { radius: 0.22, pad: 0.18 },
+  square:  { radius: 0,    pad: 0.18 },
+  circle:  { radius: 0.5,  pad: 0.15 },
+  none:    { radius: 0,    pad: 0.02 },
+};
 
+// How far the drawn ink should reach, as a fraction of the face's half-size. Fitting the
+// icon's BOX to the backing is not enough: the landscape badge fills its viewBox edge to
+// edge, while the diagonal one is a diamond inscribed in the same square, so the same box
+// leaves it visibly smaller. Measuring the ink and scaling to a common target makes any
+// icon carry the same weight, including ones added later.
+const INK_REACH = { rounded: 0.66, square: 0.66, circle: 0.88, none: 0.92 };
+
+async function draw(page, { svg, size, radius, plate, boxFrac }) {
+  const box = Math.round(size * boxFrac);
   await page.setContent(`<body style="margin:0;background:transparent">
     <div id="dc-btn" style="width:${size}px;height:${size}px;border-radius:${radius};
          background:${plate};display:flex;align-items:center;justify-content:center;
-         box-sizing:border-box;padding:${inset}px">
-      <div style="width:100%;height:100%;display:flex">${svg}</div></div></body>`);
+         box-sizing:border-box">
+      <div style="width:${box}px;height:${box}px;display:flex">${svg}</div></div></body>`);
   await page.evaluate(() => { const s = document.querySelector('#dc-btn svg');
     s.setAttribute('width', '100%'); s.setAttribute('height', '100%');
     s.style.width = '100%'; s.style.height = '100%'; });
   return page.locator('#dc-btn').screenshot({ omitBackground: true });
+}
+
+export async function renderButtonFace(page, { iconFile, size = 512, ink, backing, backingColor, dir }) {
+  let svg = readFileSync(new URL(`./icons/${iconFile}`, dir), 'utf8');
+  svg = svg.replace(/<\?xml[^>]*\?>/, '').replace(/fill="#000000"/g, `fill="${ink}"`)
+           .replace(/(width|height)="\d+px"/g, '');
+  const spec = BACKINGS[backing];
+  const radius = spec.radius >= 0.5 ? '50%' : `${Math.round(size * spec.radius)}px`;
+  const plate = backing === 'none' ? 'transparent' : backingColor;
+  const round = backing === 'circle';
+
+  // probe with no backing, so only the icon's own ink is measured, then scale to the target
+  const probeFrac = 1 - 2 * spec.pad;
+  const probe = PNG.sync.read(await draw(page, { svg, size:256, radius:'0',
+    plate:'transparent', boxFrac:probeFrac }));
+  const c = 128; let reach = 0;
+  for (let y = 0; y < probe.height; y++) for (let x = 0; x < probe.width; x++) {
+    if (probe.data[(y * probe.width + x) * 4 + 3] < 128) continue;
+    const dx = Math.abs(x + 0.5 - c), dy = Math.abs(y + 0.5 - c);
+    reach = Math.max(reach, round ? Math.hypot(dx, dy) : Math.max(dx, dy));
+  }
+  const grow = reach > 0 ? Math.min(1.6, Math.max(1, (INK_REACH[backing] * c) / reach)) : 1;
+  return draw(page, { svg, size, radius, plate, boxFrac: probeFrac * grow });
 }
