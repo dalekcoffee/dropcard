@@ -29,6 +29,28 @@ sits on (which reads mirrored). Run it on anything you are about to hand someone
 
 `extract.mjs` drives Chromium through Playwright (`/opt/pw-browsers`, preinstalled).
 
+## Exporting from the browser
+
+`browser/pack.mjs` writes a `.resonitepackage` with **no dependencies** — BSON, Brotli, zip
+and SHA-256, in about 200 lines, using only `TextEncoder`, `DataView`, `CompressionStream`
+and `crypto.subtle`. The Node builders reach for `bson`, `brotli-wasm` and `jszip`; none of
+those belong in a 7MB single-file app, and the compressor has no browser build worth shipping.
+
+```sh
+node browser/selftest.mjs out/dropcard_info-editorial.resonitepackage
+```
+
+The self-test takes a package the Node builders made, decodes it with the real libraries,
+feeds the decoded tree straight back through `pack.mjs`, and decodes that again. Identical
+trees mean the hand-written writers read back the way the engine's own libraries expect. It
+runs in Node only because that is where the reference libraries live.
+
+Still to do before the site can export: rasterising the card without Playwright (the plates
+and graphics are screenshots of DOM subtrees today), and getting font bytes Resonite will
+accept — `FontX.Load` lists `woff2`, which is the format a browser can actually fetch from
+gstatic, but the extension is sniffed from content for a `packdb://` URL with no suffix
+(`Font.cs:262`) and that sniffer is a third-party library, so it needs testing in-world.
+
 ## Why it reads the DOM
 
 The 41 card templates are imperative render functions, so there is no data structure
@@ -279,7 +301,11 @@ Each of these cost a round trip to find, so they are written down:
   kills every node in the connected component. Bisect with a minimal graph rather than
   guessing. Groups derive from wiring; there is no group entity in the file format.
 - **`Compression.None` does not load.** `DataTreeConverter` throws on it; only LZ4, LZMA and
-  Brotli are accepted, so a browser port still needs a real compressor.
+  Brotli are accepted. That does **not** mean a browser port needs a compressor: Brotli's own
+  format has an uncompressed meta-block (RFC 7932 §9.2), so a valid stream can be emitted by
+  a few lines of bit-writing. `browser/pack.mjs` does that. It costs about four bytes per
+  64KB, and everything large in a package — PNGs, fonts — is stored beside the blob already
+  compressed, so a whole card comes out 0.2% bigger than the `brotli-wasm` version.
 - **Google Fonts serves woff2 to modern user agents and EOT to an IE one.** Only an old
   Android UA yields a plain `.ttf`. `fetchfont.mjs` checks the magic bytes and throws
   rather than shipping a dead font.
