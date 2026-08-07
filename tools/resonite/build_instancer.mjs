@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { Int32 } from 'bson';
 import pkg from '/opt/node22/lib/node_modules/playwright/index.js'; const { chromium } = pkg;
-import { cardRoot, newEncoder, TV, CP as CARD_CP } from './build_batch.mjs';
+import { cardRoot, newEncoder, assertFacing, TV, CP as CARD_CP } from './build_batch.mjs';
 import { cardTheme, inkFor, resolveIcon, renderButtonFace, BACKINGS } from './icon.mjs';
 
 const FE = '[FrooxEngine]FrooxEngine.';
@@ -279,6 +279,9 @@ const root = pf.makeSlot('dropcard dispenser', [
   pf.component(CARD_CP.ObjectRoot, {}).comp,
   pf.component(CARD_CP.Grabbable, { Scalable:true }).comp,
 ], [0,0,0], [buttonSlot, handleSlot, card.root, fluxSlot], null, pf.rootId);
+
+// the dispenser's own slabs obey the same rule as the card's layers
+assertFacing(root, pf, 'dispenser');
 
 const r = await pf.exportPackage({ name:`dropcard dispenser${MINIMAL?' minimal':''} (${job.template})`, root,
   assets, embeddedAssets:embeds, outPath:`out/dropcard_dispenser${MINIMAL?'_minimal':''}.resonitepackage`,

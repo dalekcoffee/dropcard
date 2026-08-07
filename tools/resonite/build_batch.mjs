@@ -4,7 +4,8 @@
 import { ProtoFlux } from './protoflux.mjs';
 import { fetchTTF } from './fetchfont.mjs';
 import { cardTheme, inkFor, renderOverlay } from './icon.mjs';
-import { Int32 } from 'bson';
+import { Int32, Double } from 'bson';
+const D0 = n => new Double(n);
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
@@ -37,6 +38,66 @@ if (SHIELD_Z + SHIELD_DEPTH / 2 >= Math.min(LINK_Z, CONTACT_Z) - Math.max(LINK_D
 const SIZE_GAIN = 10, LH_BASIS = 0.8 / 1.2;
 const ALIGN = { left:'Left', center:'Center', right:'Right', justify:'Justify', start:'Left', end:'Right' };
 const slug = t => (t.replace(/\s+/g,' ').trim().slice(0,24) || 'Text');
+
+// ── FACING ──────────────────────────────────────────────────────────────────
+// Read this before adding anything visible. Three separate elements have shipped mirrored,
+// and every time the cause was the same: a rotation constant copied from a neighbour that
+// sat at a DIFFERENT DEPTH in the slot tree. The rule is not local, so it cannot be authored
+// by copying — it depends on the product of every ancestor's rotation.
+//
+// A quad or a TextRenderer whose ancestors and own mesh rotation compose to identity faces
+// -Z; one that composes to 180-about-Y faces +Z. Either is fine on its own — what makes it
+// read mirrored is facing AWAY from the side of the card it sits on. So the whole rule is:
+//
+//     net rotation is 180-about-Y  <=>  the element sits at z > 0
+//
+// which `assertFacing` checks on the finished tree, on every build, for every element. That
+// check is the fix; this comment is only here to explain it. Practical consequence: below a
+// face slot, exactly ONE 180 must appear between the face and the pixels. `px()` supplies it
+// for everything under it, so those quads take NO_ROT; a quad parented straight to the face
+// supplies its own with Y180.
+const Y180 = () => [D0(0), D0(1), D0(0), D0(0)];
+const NO_ROT = () => [D0(0), D0(0), D0(0), D0(1)];
+// how a call site says where it sits, so the reader never has to count 180s
+const UNDER_PX = false, ON_THE_FACE = true;
+const isY180 = r => r && Math.abs(Number(r[1]) - 1) < 1e-6 && Math.abs(Number(r[3])) < 1e-6;
+
+export function assertFacing(root, pf, label = 'object') {
+  const idx = cp => pf.typeIndex(cp).value;                 // typeIndex is idempotent
+  const T = { quad: idx(CP.QuadMesh), rend: idx(CP.MeshRenderer), text: idx(CP.TextRenderer) };
+  const quadRot = new Map();
+  (function collect(s) {
+    for (const c of s.Components.Data)
+      if (c.Type.value === T.quad) quadRot.set(c.Data.ID, c.Data.Rotation?.Data);
+    for (const c of s.Children) collect(c);
+  })(root);
+
+  const bad = [];
+  (function walk(s, parity, z, scaleZ, path) {
+    // only the ancestors' flip parity decides the SIGN of a local z offset
+    const worldZ = z + (parity % 2 ? -1 : 1) * Number(s.Position.Data[2]) * scaleZ;
+    const mine = parity + (isY180(s.Rotation.Data) ? 1 : 0);
+    const myScale = scaleZ * Number(s.Scale.Data[2]);
+    const here = `${path}/${s.Name.Data}`;
+    const check = (p, what) => {
+      const wantPositiveZ = p % 2 === 1;
+      if (Math.abs(worldZ) < 1e-9 || (worldZ > 0) !== wantPositiveZ)
+        bad.push(`${here} (${what}) faces ${wantPositiveZ ? '+Z' : '-Z'} but sits at ` +
+                 `z=${(worldZ * 1000).toFixed(2)}mm — it will read MIRRORED`);
+    };
+    for (const c of s.Components.Data) {
+      if (c.Type.value === T.text) check(mine, 'TextRenderer');
+      if (c.Type.value === T.rend) {
+        const rot = quadRot.get(c.Data.Mesh?.Data);
+        if (rot !== undefined) check(mine + (isY180(rot) ? 1 : 0), 'quad');
+      }
+    }
+    for (const c of s.Children) walk(c, mine, worldZ, myScale, here);
+  })(root, 0, 0, 1, '');
+
+  if (bad.length) throw new Error(`facing check failed on ${label}:\n  ` + bad.join('\n  '));
+  return true;
+}
 
 const ttfCache = new Map();   // family|weight -> bytes, shared across cards
 async function ttf(family, weight) {
@@ -72,7 +133,12 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = nu
     FaceSoftness:D(0), BlendMode:'Alpha', Sidedness:'Double', ZWrite:'Auto', RenderQueue:new Int32(Q_TEXT) });
   assets.push(textMat.entry);
 
-  function texturedQuad(png, { w, h, tint=[1,1,1,1], queue }) {
+  // ownFlip: does this quad supply its OWN 180-about-Y? See FACING below — everything under a
+  // face must contribute exactly one, and the `px` wrapper already supplies it for its children.
+  // Deliberately has no default: a wrong guess here is invisible until someone reads the
+  // card in VR, so a new call site must say where it sits.
+  function texturedQuad(png, { w, h, tint=[1,1,1,1], queue, ownFlip }) {
+    if (ownFlip === undefined) throw new Error('texturedQuad needs an explicit ownFlip');
     const hash = createHash('sha256').update(png).digest('hex');
     const tex = asset(CP.StaticTexture2D, { URL:`@packdb:///${hash}`, Uncompressed:false,
       DirectLoad:false, ForceExactVariant:false, PreferredProfile:'sRGB', MipMapBias:D(0),
@@ -83,7 +149,7 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = nu
       ZWrite: queue===Q_PLATE ? 'On' : 'Auto', RenderQueue:new Int32(queue) });
     assets.push(tex.entry, mat.entry);
     if (!embeds.some(e => e.hash === hash)) embeds.push({ hash, bytes:png });
-    const quad = pf.component(CP.QuadMesh, { Rotation:[D(0),D(1),D(0),D(0)], Size:[D(w),D(h)],
+    const quad = pf.component(CP.QuadMesh, { Rotation: ownFlip ? Y180() : NO_ROT(), Size:[D(w),D(h)],
       UVOffset:[D(0),D(0)], UVScale:[D(1),D(1)], ScaleUVWithSize:false });
     const rend = pf.component(CP.MeshRenderer, { Mesh:quad.id, Materials:pf.list([mat.id]),
       MaterialPropertyBlocks:[], ShadowCastMode:'On', SortingOrder:new Int32(0) });
@@ -109,7 +175,7 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = nu
 
   const gfxSlot = side => (g,i) => pf.makeSlot(`${String(i+1).padStart(2,'0')} ${g.name||'graphic'}`,
     texturedQuad(readFileSync(new URL(`./${prefix}-gfx-${side}-${i}.png`, import.meta.url)),
-      { w:g.w, h:g.h, tint:[1,1,1,g.alpha ?? 1], queue:Q_GFX }),
+      { w:g.w, h:g.h, tint:[1,1,1,g.alpha ?? 1], queue:Q_GFX, ownFlip:UNDER_PX }),
     [ (g.x+g.w/2)-PX_W/2, -((g.y+g.h/2)-PX_H/2), -GFX_Z ]);
 
   // Add-contact lives on the name and the profile picture rather than a separate button:
@@ -209,7 +275,8 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = nu
     // TouchButton.IsHovering: no ProtoFlux, so a card works on its own away from a dispenser.
     if (t.overlay) {
       const ov = pf.makeSlot('Add contact (on hover)',
-        texturedQuad(t.overlay, { w:t.w, h:t.h, queue:Q_OVERLAY }), [0, 0, -(OVERLAY_Z-CONTACT_Z)]);
+        texturedQuad(t.overlay, { w:t.w, h:t.h, queue:Q_OVERLAY, ownFlip:UNDER_PX }),
+        [0, 0, -(OVERLAY_Z-CONTACT_Z)]);
       ov.Active.Data = false;
       kids.push(ov);
       comps.push(pf.component(CP.BoolDriver, { ValueSource: touch.comp.Data.IsHovering.ID,
@@ -268,10 +335,10 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = nu
   function faceSlot(side, z, flip) {
     const f = faces[side]; if (!f) return null;
     const px = (name, kids) => { const r = pf.makeSlot(name, [], [0,0,0], kids);
-      r.Scale.Data=[D(S),D(S),D(S)]; r.Rotation.Data=[D(0),D(1),D(0),D(0)]; return r; };
+      r.Scale.Data=[D(S),D(S),D(S)]; r.Rotation.Data=Y180(); return r; };
     const kids = [ pf.makeSlot('Background',
       texturedQuad(readFileSync(new URL(`./${prefix}-bg-${side}.png`, import.meta.url)),
-        { w:CARD_W, h:CARD_H, queue:Q_PLATE }), [0,0,0]) ];
+        { w:CARD_W, h:CARD_H, queue:Q_PLATE, ownFlip:ON_THE_FACE }), [0,0,0]) ];
     if (f.gfx?.length)   kids.push(px('Graphics', f.gfx.map(gfxSlot(side))));
     if (f.layers.length) kids.push(px('Text', f.layers.map(textSlot)));
     if (f.links?.length) kids.push(px('Links', f.links.map(linkSlot)));
@@ -281,7 +348,7 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = nu
     const sh = shieldsFor(side);
     if (sh.length) kids.push(px('Shields', sh.map(shieldSlot)));
     const s = pf.makeSlot(side==='front'?'Front':'Back', [], [0,0,z], kids);
-    if (flip) s.Rotation.Data=[D(0),D(1),D(0),D(0)];
+    if (flip) s.Rotation.Data=Y180();
     return s;
   }
 
@@ -297,6 +364,9 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = nu
   // with its plate, so nothing inside it is mirrored by this.
   ], [0,0,0], [faceSlot('front', -CARD_GAP/2, true), faceSlot('back', CARD_GAP/2, false)].filter(Boolean),
      null);
+
+  // Runs on every card, every build. This is what stops a fourth mirrored element.
+  assertFacing(root, pf, `${job.template} card`);
 
   const noPic = Object.entries(faces)
     .filter(([, f]) => f.avatar && !f.avatar.hasImage).map(([side]) => side);

@@ -20,13 +20,12 @@ node batch.mjs                        # several templates in one browser session
 node build_batch.mjs                  # → one package per captured template
 node build_instancer.mjs info-ticket  # → out/dropcard_dispenser.resonitepackage
 
-node verify_colliders.mjs out/dropcard_info-editorial.resonitepackage
+node verify.mjs out/dropcard_info-editorial.resonitepackage
 ```
 
-`verify_colliders.mjs` decodes a built package and prints every collider in world-space
-millimetres, failing if a touchable one straddles the card plane. Run it on anything you are
-about to hand someone: collider faults are invisible in a render and only show up when the
-card is in someone's hands.
+`verify.mjs` decodes a built package and checks the two faults that are invisible in a render
+— a touchable collider straddling the card plane, and any element facing away from the side it
+sits on (which reads mirrored). Run it on anything you are about to hand someone.
 
 `extract.mjs` drives Chromium through Playwright (`/opt/pw-browsers`, preinstalled).
 
@@ -202,11 +201,19 @@ Each of these cost a round trip to find, so they are written down:
   > rotation is 180° about Y. Position is expressed in the PARENT's frame and is *not*
   > affected by the element's own rotation.
 
-  Which gives two opposite cases, and mixing them up is the trap:
-  - element carrying its **own** `[0,1,0,0]` → its local z must be **positive** to sit toward
-    the viewer (the button label).
-  - element **under a parent** carrying `[0,1,0,0]` → its local z must be **negative**,
-    because the parent's rotation negates it (the card's text/graphics/links).
+  Which reduces to one invariant, now **checked on every build** by `assertFacing` in
+  `build_batch.mjs` and again from the decoded bytes by `verify.mjs`:
+
+  > net rotation is 180-about-Y  ⇔  the element sits at z > 0
+
+  Writing the rule down here was not enough — it shipped wrong three times anyway, always
+  because a rotation constant was copied from a neighbour sitting at a **different depth**.
+  The rule depends on the product of every ancestor's rotation, so it cannot be authored
+  locally, which is why it is a build-time assertion rather than a convention. Practical
+  consequence: below a face slot exactly ONE 180 must appear between the face and the pixels.
+  `px()` supplies it for everything under it (those quads take `ownFlip: UNDER_PX`); a quad
+  parented straight to the face supplies its own (`ownFlip: ON_THE_FACE`). `texturedQuad` has
+  no default for that argument on purpose.
 - **`TextRenderer.Size` is multiplied by `0.1` internally** (`TextRenderer.cs`), so an
   em-height of N px means `Size = N * 10`.
 - **`TextUnlitMaterial.BackgroundColor` defaults to opaque black.** Leave it unset and every
