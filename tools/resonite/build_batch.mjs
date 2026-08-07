@@ -185,15 +185,22 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
     }).filter(t => t.w > 8 && t.h > 8);
   };
 
-  const contactSlot = (t, i) => pf.makeSlot(`${String(i+1).padStart(2,'0')} add contact — ${t.what}`,
-    [ pf.component(CP.BoxCollider, { Size:[D(t.w),D(t.h),D(CONTACT_DEPTH)], Type:'Static',
-        Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false }).comp,
-      pf.component(CP.TouchButton, { AcceptPhysicalTouch:true, AcceptRemoteTouch:true,
-        AcceptOutOfSightTouch:false }).comp,
-      // Normally empty — the instancer bakes it in once it knows the owner. Set
-      // DROPCARD_USERID to hardcode one for testing the click end to end.
-      pf.component(CP.ContactLink, { UserId: process.env.DROPCARD_USERID || '' }).comp ],
-    [ (t.x+t.w/2)-PX_W/2, -((t.y+t.h/2)-PX_H/2), -CONTACT_Z ]);
+  // Field IDs of every ContactLink.UserId, so the instancer can bake the owner into them.
+  // A component ID is not enough: writing a field needs the FIELD's id.
+  const userIdFields = [];
+  const contactSlot = (t, i) => {
+    // Normally empty — the instancer bakes it in once it knows the owner. Set
+    // DROPCARD_USERID to hardcode one for testing the click end to end.
+    const link = pf.component(CP.ContactLink, { UserId: process.env.DROPCARD_USERID || '' });
+    userIdFields.push(link.comp.Data.UserId.ID);
+    return pf.makeSlot(`${String(i+1).padStart(2,'0')} add contact — ${t.what}`,
+      [ pf.component(CP.BoxCollider, { Size:[D(t.w),D(t.h),D(CONTACT_DEPTH)], Type:'Static',
+          Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false }).comp,
+        pf.component(CP.TouchButton, { AcceptPhysicalTouch:true, AcceptRemoteTouch:true,
+          AcceptOutOfSightTouch:false }).comp,
+        link.comp ],
+      [ (t.x+t.w/2)-PX_W/2, -((t.y+t.h/2)-PX_H/2), -CONTACT_Z ]);
+  };
 
   const contacts = { front: contactTargets('front'), back: faces.back ? contactTargets('back') : [] };
 
@@ -263,7 +270,7 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
   if (noPic.length)
     console.log(`     ! no profile picture on the ${noPic.join(' and ')} — the add-contact ` +
                 `target is the empty placeholder frame. Import or upload an avatar for a real one.`);
-  return { root, CARD_W, CARD_H, S, fonts, noPic, touchReport };
+  return { root, CARD_W, CARD_H, S, fonts, noPic, touchReport, userIdFields };
 }
 
 export { TV, CP, LONG_EDGE, CARD_GAP, COLLIDER_T };

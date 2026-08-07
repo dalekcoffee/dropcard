@@ -32,6 +32,17 @@ const N = {
   RefButton:     GREF(`${FE}IButton`),
   RefSlot:       GREF(`${FE}Slot`),
   ElemSlot:      '[ProtoFluxBindings]FrooxEngine.FrooxEngine.ProtoFlux.CoreNodes.ElementSource<[FrooxEngine]FrooxEngine.Slot>',
+  // baking the owner's id into the template's ContactLinks
+  Update:        PB + 'Actions.Update',
+  If:            PB + 'If',
+  GetActiveUser: PB + 'FrooxEngine.Slots.GetActiveUser',
+  UserUserID:    PB + 'FrooxEngine.Users.UserUserID',
+  NotNullUser:   PB + `NotNull<${FE}User>`,
+  IsStringEmpty: PB + 'Strings.IsStringEmpty',
+  AndBool:       PB + 'Operators.AND_Bool',
+  RefStrField:   GREF(`${FE}IValue<string>`),
+  StrSource:     '[ProtoFluxBindings]FrooxEngine.FrooxEngine.ProtoFlux.CoreNodes.ObjectValueSource<string>',
+  WriteStr:      PB + `ObjectWrite<${FE}ProtoFlux.FrooxEngineContext,string>`,
 };
 const TOUCH_BUTTON = FE + 'TouchButton';
 
@@ -184,6 +195,44 @@ if (MINIMAL) {
 }
 const hand = fnode(N.BodyNodeSlot, { Source:me.id, Node:handNodeSource }, 'hand slot');
 
+// ── baking the owner's UserId into the template ─────────────────────────────
+// The card's ContactLink ships with UserId EMPTY: a card that hands out someone else's
+// contact is worse than one that hands out none. The dispenser fills it in once, from
+// whoever is holding it — never from whoever presses it, so a stranger pressing your
+// dispenser gets your card rather than becoming its owner.
+//
+// GetActiveUser on the dispenser's own root is what "holding it" means: a grabbed object is
+// parented under the grabber's UserRoot, so its active user IS the person holding it, and it
+// stays baked after they put it down. Same for parenting it under yourself by hand.
+//
+// The gate is `owner exists AND the id is still blank`, so the write happens once and a
+// later grab by someone else cannot overwrite it — which is the whole reason this is a WRITE
+// and not a drive. Update runs on the HOST only (UserUpdateBase.ShouldRegister falls back to
+// World.HostUser when UpdatingUser is null and SkipIfNull is false), so exactly one client
+// does it rather than all of them racing.
+const rootProxy = fnode(N.RefSlot,  { Reference: pf.rootId }, 'Dispenser root source');
+const rootSrc   = fnode(N.ElemSlot, { Source: rootProxy.id }, 'Dispenser root source');
+const owner     = fnode(N.GetActiveUser, { Instance: rootSrc.id }, 'who is holding this');
+const ownerId   = fnode(N.UserUserID,    { User: owner.id },       'their user id');
+const haveOwner = fnode(N.NotNullUser,   { Instance: owner.id },   'someone is holding it');
+
+// One GlobalReference + ObjectValueSource per ContactLink — a field is reached through a
+// proxy pair, exactly as DuplicateSlot.Template is. The first source doubles as the READ
+// used by the gate, so no extra node is needed to ask whether the id is already set.
+const links = card.userIdFields.map((fieldId, i) => {
+  const ref = fnode(N.RefStrField, { Reference: fieldId }, `UserId field ${i+1}`);
+  return fnode(N.StrSource, { Source: ref.id }, `UserId field ${i+1}`);
+});
+if (!links.length) throw new Error('the card has no ContactLink to bake a UserId into');
+const blank   = fnode(N.IsStringEmpty, { A: links[0].id }, 'id still blank?');
+const ready   = fnode(N.AndBool, { A: haveOwner.id, B: blank.id }, 'ready to bake');
+const gate    = fnode(N.If, { OnTrue:null, OnFalse:null, Condition: ready.id }, 'only once');
+const tick    = fnode(N.Update, { UpdatingUser:null, SkipIfNull:null, OnUpdate: gate.id }, 'Update');
+const writes  = links.map((src, i) => fnode(N.WriteStr,
+  { OnWritten:null, OnFail:null, Variable: src.id, Value: ownerId.id }, `bake into contact ${i+1}`));
+wire(gate, 'OnTrue', writes[0].id);
+writes.forEach((w, i) => { if (writes[i+1]) wire(w, 'OnWritten', writes[i+1].id); });
+
 // impulse chain: press → duplicate → parent into the hand → make it visible
 wire(evt,    'Pressed',   dup.id);
 wire(dup,    'Next',      setPar.id);
@@ -208,7 +257,15 @@ const AT = {
   'LeftHand':               [-0.44,  0.22], 'RightHand':         [-0.44,  0.08],
   'RightHand (fixed)':      [-0.44,  0.15],
   'pick hand':              [-0.20,  0.15], 'hand slot':         [ 0.04,  0.15],
+  // the bake, on its own band well below the dispense chain
+  'Dispenser root source':  [-1.40,  1.20], 'who is holding this':   [-1.16, 1.20],
+  'their user id':          [-0.92,  1.20], 'someone is holding it': [-0.92, 1.44],
+  'id still blank?':        [-0.68,  1.60], 'ready to bake':         [-0.44, 1.52],
+  'Update':                 [-0.44,  1.20], 'only once':             [-0.20, 1.20],
 };
+// one row per ContactLink, so the count follows the template rather than the layout map
+links.forEach((_, i) => { AT[`UserId field ${i+1}`]    = [-1.40, 1.60 + i * 0.16]; });
+writes.forEach((_, i) => { AT[`bake into contact ${i+1}`] = [0.04 + i * 0.24, 1.20]; });
 const grouped = new Map();
 for (const n of nodes) {
   if (!AT[n.name]) throw new Error(`no pretty-flux placement for node "${n.name}"`);

@@ -90,14 +90,14 @@ weight for free.
 These are the options the app's export panel is meant to offer, which is why they live in
 `icon.mjs` rather than being baked into the builder.
 
-## Add-contact (design settled, not built yet)
+## Add-contact (built, except the hover overlay)
 
 `ContactLink` (`[Category("Cloud")]`, old name `FriendLink`) holds a `Sync<string> UserId`
 and opens the contact panel on touch. `CanTouchInteract` returns `!IsUnderLocalUser`, so it
 refuses its own owner — free correct behaviour.
 
-**The name and the profile picture are the buttons**, with a themed "Add contact" overlay on
-hover. No template edits needed: the exporter finds the name by matching the `name`/
+**The name and the profile picture are the buttons.** The themed "Add contact" hover overlay
+is the one piece still to build. No template edits needed: the exporter finds the name by matching the `name`/
 `nickname` field values against captured text runs, and the avatar by matching the `<img>`
 src. Element colour/font/size are already captured, so the overlay can be drawn in each
 template's own theme.
@@ -119,31 +119,55 @@ slot: BoxCollider + TouchButton + ContactLink
       TouchButton press      -> ForeachComponent -> ContactLink.Pressed()
 ```
 
-**Filling in the UserId without asking anyone to type it.** Leave it blank in the export;
-on the INSTANCER (never the card), detect the owner and bake the value in once:
+## Baking in the UserId (built)
+
+The card ships with `ContactLink.UserId` **empty**, because a card that hands out someone
+else's contact is worse than one that hands out none. The dispenser fills it in, on its own
+graph — never on the card:
 
 ```
-GetActiveUser / GetUserFromComponent -> UserUserID -> write into the template's ContactLink.UserId
+Update ─► If(owner exists AND id still blank) ─► ObjectWrite ─► ObjectWrite ─► …
+            │                                     Variable = ObjectValueSource<string>
+GetActiveUser(dispenser root) ─► UserUserID ──────Value ──────┘
 ```
 
-The write node is **`WriteObjectToGlobal<string>`** — a real one-shot write, not a drive:
+**`GetActiveUser` on the dispenser's own root is what "holding it" means.** A grabbed object
+is parented under the grabber's `UserRoot`, so the slot's active user *is* whoever picked it
+up, and the value stays baked after they put it down. Parenting it under yourself by hand
+works the same way. Reading the presser instead would let a stranger who clicks your
+dispenser become its owner.
 
-```csharp
-public readonly GlobalRef<T> Global;   // proxy pointing at ContactLink.UserId
-public ObjectInput<T> Value;
-protected override IOperation Run(C ctx) { if (Global.Write(Value.Evaluate(ctx), ctx)) … }
+**The gate is what makes it a bake.** `owner exists AND the id is still blank` — so it writes
+once and a later grab by somebody else cannot overwrite it. That gate is the entire reason
+this is a write rather than a drive; a drive re-evaluates and would follow whoever touched it
+last.
+
+**`Update` runs on the host only**, so one client does the write instead of all of them
+racing: `UserUpdateBase.ShouldRegister` falls back to `World.HostUser` when `UpdatingUser` is
+null and `SkipIfNull` is false, then registers only if that user is local.
+
+`UserUserID` gives the real `U-…` id, not `UserUsername` — a username can change while the id
+stays put, so `"U-" + username` would be wrong.
+
+**Writing a scene FIELD takes the proxy pair, same as `DuplicateSlot.Template`.** The obvious
+candidate is wrong twice over: `WriteObjectToGlobal<T>.Global` is an `IGlobalValueProxy<T>`,
+i.e. a `GlobalValue<T>` component's own value, not a field somewhere in the scene. The real
+shape is
+
+```
+GlobalReference<[FrooxEngine]FrooxEngine.IValue<string>>   Reference = the UserId FIELD id
+  └─ ObjectValueSource<string>                            Source    = that GlobalReference
+       └─ ObjectWrite<…FrooxEngineContext,string>          Variable  = that source
 ```
 
-`ObjectWrite<T>` is the sibling that writes a graph variable rather than a scene field, and
-`DataModelObjectFieldStore<T>` is a graph variable of its own (it holds its own `Value`), so
-neither is the one. Gate the write with `FireOnTrue` on "owner is known" so it fires on the
-edge and never rewrites.
+and `Reference` must be the **field's** id, not the `ContactLink` component's. The
+`ObjectValueSource` is also readable, so the same node feeds `IsStringEmpty` for the gate —
+no extra node to ask whether the id is already set. Note the write's type argument spells out
+the context (`ObjectWrite<[FrooxEngine]FrooxEngine.ProtoFlux.FrooxEngineContext,string>`)
+where most bindings elide it; `ValueConditional<T>` and `NotNull<T>` next to it do not.
 
-`UserUserID` gives the real `U-…` id, not `UserUsername` — a username can be changed while
-the id stays put, so `"U-" + username` would be wrong. Write it, do **not** drive it: a drive
-re-evaluates, so a different user grabbing the card would rewrite the owner. Doing it on the
-instancer keeps the card itself inert. The remaining open piece is which one-shot write node
-to use.
+One chain per `ContactLink` on the card, wired `OnWritten → next`, so all of them are filled
+from the one impulse: Editorial has three (name front, photo front, name back).
 
 ## Things the engine does that will bite you
 
