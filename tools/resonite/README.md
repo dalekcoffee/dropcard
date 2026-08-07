@@ -18,6 +18,7 @@ node build_card.mjs                   # → out/dropcard_Sample_baked.resonitepa
 
 node batch.mjs                        # several templates in one browser session
 node build_batch.mjs                  # → one package per captured template
+node build_instancer.mjs info-ticket  # → out/dropcard_dispenser.resonitepackage
 
 node verify_colliders.mjs out/dropcard_info-editorial.resonitepackage
 ```
@@ -57,6 +58,29 @@ That is why the root carries `Grabbable` and a separate **Handle** tab. Grab and
 not compete for one collider: the button's collider carries `TouchButton` (`ITouchable` wins
 there), while the handle's collider carries only geometry, so pointing at it grabs the whole
 object instead of pressing it.
+
+## The dispenser's button
+
+The button face is one of two card icons (`icons/`, landscape and diagonal) on a backing,
+rasterised through the same browser that renders the cards. All of it is optional:
+
+```sh
+node build_instancer.mjs info-ticket \
+  --icon=landscape|vertical|auto  --backing=square|pill|none \
+  --backing-color=#7755cc|theme   --icon-color=#ffffff|theme
+```
+
+`auto` follows the card's orientation, and `theme` reads the colours back out of the card
+itself — no template declares them. The paper colour is the commonest opaque colour in the
+plate raster; the accent is the most saturated colour the card spends real area on, with a
+brightness floor so a near-black like `#110000` (fully saturated, and just ink) cannot win,
+and printed bands beating text because a template's accent is usually a filled area. The ink
+is whichever of the card's paper, white, or near-black clears 3.5:1 on the chosen backing —
+a themed button nobody can read is not on theme. `--backing=none` leaves the icon alone with
+no plate, and picks its ink against the card's paper.
+
+These are the options the app's export panel is meant to offer, which is why they live in
+`icon.mjs` rather than being baked into the builder.
 
 ## Add-contact (design settled, not built yet)
 
@@ -201,6 +225,12 @@ Each of these cost a round trip to find, so they are written down:
   gives the spawned slot `rotation = LocalUserViewRotation`, and the view rotation's +Z points
   where you are looking, i.e. away from you. A card whose front faced +Z therefore always
   arrived back-first. The front sits at −Z for that reason.
+- **An element screenshot is a CROP OF THE PAGE, not a render of the element.** Anything the
+  app paints inside that rectangle comes along, and it shows up exactly where the card is
+  meant to be see-through: Ticket's die-cut notches came back filled with whatever editor
+  panel sat behind them, on the bottom edge but not the top, because that is where the panel
+  happened to be. A transparent page background is not enough — the rest of the page has to
+  be hidden outright and the card alone re-shown before the shot.
 - **SVG text cannot become a `TextRenderer`** — the seals lay text around a circle with
   `<textPath>`. Those become their own image layer, never baked into the plate. Cloning one
   out for rastering drops inherited opacity, so the effective alpha rides on the tint.

@@ -7,7 +7,9 @@
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { Int32 } from 'bson';
+import pkg from '/opt/node22/lib/node_modules/playwright/index.js'; const { chromium } = pkg;
 import { cardRoot, newEncoder, TV, CP as CARD_CP } from './build_batch.mjs';
+import { cardTheme, inkFor, resolveIcon, renderButtonFace } from './icon.mjs';
 
 const FE = '[FrooxEngine]FrooxEngine.';
 const PB = '[ProtoFluxBindings]FrooxEngine.ProtoFlux.Runtimes.Execution.Nodes.';
@@ -33,8 +35,14 @@ const N = {
 };
 const TOUCH_BUTTON = FE + 'TouchButton';
 
-const BTN = 0.05;            // 50mm button face
-const prefixArg = process.argv[2] || 'info-editorial';
+// --icon=landscape|vertical|auto  --backing=square|pill|none
+// --backing-color=#rrggbb|theme   --icon-color=#rrggbb|theme
+const OPT = Object.fromEntries(process.argv.filter(a => a.startsWith('--') && a.includes('='))
+  .map(a => a.slice(2).split('=')));
+const hexToRGB = h => { const s = h.replace('#','');
+  const n = s.length === 3 ? [...s].map(c => c + c) : s.match(/../g);
+  return n.map(v => parseInt(v, 16)); };
+const prefixArg = process.argv.slice(2).find(a => !a.startsWith('-')) || 'info-editorial';
 // --minimal drops the hand heuristic (distance/compare/conditional) and spawns straight
 // into the right hand. If minimal works and full doesn't, the hand maths is at fault;
 // if neither works, the button or the ButtonEvents binding is.
@@ -69,18 +77,42 @@ const PALM_OFFSET = [0, 0, 0];
 card.root.Position.Data = PALM_OFFSET.map(D);
 
 // ── the button ─────────────────────────────────────────────────────────────
-// Deliberately NOT card-shaped: a coloured slab with a printed label, so it reads as
-// something to press rather than as another card lying around.
-const BTN_W = 0.16, BTN_H = 0.055;
-const solid = (rgb) => asset(CARD_CP.Unlit, {
-  TintColor:[D(rgb[0]),D(rgb[1]),D(rgb[2]),D(1),'sRGB'],
-  BlendMode:'Opaque', AlphaCutoff:D(0.5), UseVertexColors:false,
-  ZWrite:'On', RenderQueue:new Int32(2000) });
+// The card icon on a backing, in the card's own colours. Deliberately NOT card-shaped: it
+// reads as something to press rather than as another card lying around. Every choice here
+// is meant to become an export option in the app, so none of it is hardcoded — see icon.mjs.
+const theme = cardTheme(job, prefixArg, import.meta.url);
+const backing = OPT.backing ?? 'square';                       // square | pill | none
+if (!['square','pill','none'].includes(backing)) throw new Error(`unknown backing "${backing}"`);
+const backingColor = (!OPT['backing-color'] || OPT['backing-color'] === 'theme')
+  ? theme.accent : OPT['backing-color'];
+const ink = (!OPT['icon-color'] || OPT['icon-color'] === 'theme')
+  ? inkFor(backing === 'none' ? theme.surfaceRGB : hexToRGB(backingColor), theme)
+  : OPT['icon-color'];
+const iconFile = resolveIcon(OPT.icon ?? 'auto', job);
 
-const faceMat = solid([0.41,0.41,0.97]);      // dropcard blurple
-const backMat = solid([0.09,0.09,0.15]);
-assets.push(faceMat.entry, backMat.entry);
+const browser = await chromium.launch();
+const page = await (await browser.newContext({ viewport:{width:600,height:600},
+  deviceScaleFactor:1 })).newPage();
+const facePNG = await renderButtonFace(page, { iconFile, size:512, ink, backing,
+  backingColor, dir:import.meta.url });
+await browser.close();
 
+const BTN_W = 0.075, BTN_H = 0.075;
+const faceHash = createHash('sha256').update(facePNG).digest('hex');
+const faceTex = asset(CARD_CP.StaticTexture2D, { URL:`@packdb:///${faceHash}`, Uncompressed:false,
+  DirectLoad:false, ForceExactVariant:false, PreferredProfile:'sRGB', MipMapBias:D(0),
+  IsNormalMap:false, WrapModeU:'Clamp', WrapModeV:'Clamp', PowerOfTwoAlignThreshold:D(0.05),
+  CrunchCompressed:false, MipMaps:true, KeepOriginalMipMaps:false, MipMapFilter:'Box', Readable:false });
+const faceMat = asset(CARD_CP.Unlit, { TintColor:[D(1),D(1),D(1),D(1),'sRGB'], Texture:faceTex.id,
+  BlendMode:'Alpha', AlphaCutoff:D(0.5), UseVertexColors:false, ZWrite:'On',
+  RenderQueue:new Int32(2000) });
+assets.push(faceTex.entry, faceMat.entry);
+embeds.push({ hash:faceHash, bytes:facePNG });
+
+// A quad's rotation decides both its facing and which way its texture reads: identity faces
+// -Z and reads correctly from -Z; [0,1,0,0] faces +Z and reads correctly from +Z. So the two
+// slabs carry opposite rotations and the icon is the right way round from either side —
+// which also means it does not matter which way the dispenser lands on import.
 const slab = (mat, z, flip, name) => {
   const q = pf.component(CARD_CP.QuadMesh, { Rotation:[D(0),D(flip?0:1),D(0),D(flip?1:0)],
     Size:[D(BTN_W),D(BTN_H)], UVOffset:[D(0),D(0)], UVScale:[D(1),D(1)], ScaleUVWithSize:false });
@@ -89,44 +121,19 @@ const slab = (mat, z, flip, name) => {
   return pf.makeSlot(name, [q.comp, r.comp], [0,0,z]);
 };
 
-// reuse a font the card already bundles rather than fetching another one
-const labelFont = [...card.fonts.values()][0];
-const labelMat = asset(CARD_CP.TextUnlit, {
-  TintColor:[D(1),D(1),D(1),D(1),'sRGB'], OutlineColor:[D(0),D(0),D(0),D(0),'sRGB'],
-  BackgroundColor:[D(0),D(0),D(0),D(0),'sRGB'], AutoBackgroundColor:false,
-  GlyphRenderMethod:'MSDF', PixelRange:D(4), FaceDilate:D(0), OutlineThickness:D(0),
-  FaceSoftness:D(0), BlendMode:'Alpha', Sidedness:'Double', ZWrite:'Auto', RenderQueue:new Int32(3100) });
-assets.push(labelMat.entry);
-const label = pf.makeSlot('Label', [pf.component(CARD_CP.TextRenderer, {
-  Text: MINIMAL ? 'TAP  (MINIMAL)' : 'TAP  FOR  A  CARD', ParseRichText:false, NullText:null,
-  Size:D(0.018 * 10),                       // TextRenderer multiplies Size by 0.1
-  HorizontalAlign:'Center', VerticalAlign:'Middle', AlignmentMode:'Geometric',
-  Color:[D(1),D(1),D(1),D(1),'sRGB'], Materials:pf.list([labelMat.id]), LineHeight:D(0.8),
-  Bounded:true, BoundsSize:[D(BTN_W*0.9),D(BTN_H*0.8)], BoundsAlignment:'MiddleCenter',
-  MaskPattern:null, HorizontalAutoSize:false, VerticalAutoSize:false,
-  Font:labelFont.id }).comp], [0,0,0.0015]);   // own rotation => POSITIVE z to face out
-label.Rotation.Data = [D(0),D(1),D(0),D(0)];
-// a second label on the far side: no rotation means it faces -Z, so it reads correctly
-// from behind too. A test rig shouldn't depend on which way the import happens to land.
-const labelBack = pf.makeSlot('Label (back)', [pf.component(CARD_CP.TextRenderer, {
-  Text: MINIMAL ? 'TAP  (MINIMAL)' : 'TAP  FOR  A  CARD', ParseRichText:false, NullText:null,
-  Size:D(0.018 * 10), HorizontalAlign:'Center', VerticalAlign:'Middle', AlignmentMode:'Geometric',
-  Color:[D(1),D(1),D(1),D(1),'sRGB'], Materials:pf.list([labelMat.id]), LineHeight:D(0.8),
-  Bounded:true, BoundsSize:[D(BTN_W*0.9),D(BTN_H*0.8)], BoundsAlignment:'MiddleCenter',
-  MaskPattern:null, HorizontalAutoSize:false, VerticalAutoSize:false,
-  Font:labelFont.id }).comp], [0,0,-0.0015]);
-
 const btnCol = pf.component(CARD_CP.BoxCollider, { Size:[D(BTN_W),D(BTN_H),D(0.012)],
   Type:'Static', Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false });
 const touch = pf.component(TOUCH_BUTTON, {
   AcceptPhysicalTouch:true, AcceptRemoteTouch:true, AcceptOutOfSightTouch:false });
 const buttonSlot = pf.makeSlot('Button — press me', [btnCol.comp, touch.comp], [0,0,0],
-  [ slab(faceMat, 0.0005, false, 'Face'), slab(backMat, -0.0005, true, 'Back'), label, labelBack ]);
+  [ slab(faceMat, 0.0005, false, 'Face'), slab(faceMat, -0.0005, true, 'Back') ]);
 
 // Grab handle: a tab down the left edge with a collider but NO touchable, so pointing at it
 // grabs the whole dispenser while the button face still takes clicks.
 const HANDLE_W = 0.022;
-const handleMat = solid([0.09,0.09,0.15]);
+const handleMat = asset(CARD_CP.Unlit, {
+  TintColor:[D(0.09),D(0.09),D(0.15),D(1),'sRGB'], BlendMode:'Opaque', AlphaCutoff:D(0.5),
+  UseVertexColors:false, ZWrite:'On', RenderQueue:new Int32(2000) });
 assets.push(handleMat.entry);
 const handleSlab = (z, flip, name) => {
   const q = pf.component(CARD_CP.QuadMesh, { Rotation:[D(0),D(flip?0:1),D(0),D(flip?1:0)],
@@ -213,3 +220,6 @@ const r = await pf.exportPackage({ name:`dropcard dispenser${MINIMAL?' minimal':
   assets, embeddedAssets:embeds, outPath:`out/dropcard_dispenser${MINIMAL?'_minimal':''}.resonitepackage`,
   typeVersions:TV });
 console.log(`  nodes=${nodes.length}  card=${(card.CARD_W*1000).toFixed(0)}×${(card.CARD_H*1000).toFixed(0)}mm  ${r.ok?'ok':'DANGLING'}`);
+console.log(`  button: ${iconFile.replace('CardIcon','').replace('.svg','').toLowerCase()} icon, ` +
+            `${backing} backing ${backing==='none'?'':backingColor}, ink ${ink}  ` +
+            `(card theme: surface ${theme.surface}, accent ${theme.accent})`);

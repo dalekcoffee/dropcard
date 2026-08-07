@@ -168,11 +168,25 @@ for (const job of JOBS) {
         [...document.body.children].forEach(el=>{ if(el.dataset._dcHid!==undefined){ el.style.visibility=el.dataset._dcHid.trim(); delete el.dataset._dcHid; } }); });
     }
 
-    await p.evaluate((id)=>{ document.getElementById(id).querySelectorAll('*').forEach(e=>{
-      if(e.dataset._dcText || e.dataset._dcGfx!==undefined) e.style.visibility='hidden'; }); }, id);
+    // An element screenshot is a CROP of the page, not a render of the element, so anything
+    // the app paints inside that rectangle comes along — and it is only visible through the
+    // parts of the card that are meant to be transparent. Ticket's die-cut notches picked up
+    // whatever editor panel sat behind them. A transparent page background is not enough;
+    // the rest of the page has to be hidden outright, then the card alone re-shown.
+    await p.evaluate((id)=>{ const el=document.getElementById(id);
+      el.querySelectorAll('*').forEach(e=>{
+        if(e.dataset._dcText || e.dataset._dcGfx!==undefined) e.dataset._dcKeepHidden='1'; });
+      document.querySelectorAll('body *').forEach(e=>{
+        e.dataset._dcVisWas = e.style.visibility || ''; e.style.visibility='hidden'; });
+      el.style.visibility='visible';
+      el.querySelectorAll('*').forEach(e=>{ e.style.visibility = e.dataset._dcKeepHidden ? 'hidden' : ''; });
+    }, id);
     await p.waitForTimeout(500);
     await p.locator('#'+id).screenshot({ path:`${job.prefix}-bg-${side}.png`, omitBackground:true });
     await p.evaluate((id)=>{ const el=document.getElementById(id);
+      document.querySelectorAll('body *').forEach(e=>{
+        if(e.dataset._dcVisWas!==undefined){ e.style.visibility=e.dataset._dcVisWas; delete e.dataset._dcVisWas; }
+        delete e.dataset._dcKeepHidden; });
       el.querySelectorAll('*').forEach(e=>{ if(e.dataset._dcText||e.dataset._dcGfx!==undefined){ e.style.visibility=''; delete e.dataset._dcText; delete e.dataset._dcGfx; } });
       el.style.cssText=el.dataset._old; }, id);
     await p.waitForTimeout(250);
