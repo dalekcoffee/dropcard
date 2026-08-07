@@ -18,16 +18,20 @@ const TV = { [CP.Grabbable]:2, [CP.BoxCollider]:1, [CP.QuadMesh]:1, [CP.TextRend
 const LONG_EDGE = 0.1712;   // the card's long side, whatever its orientation
 const CARD_GAP = 0.0001, COLLIDER_T = 0.002;
 const Q_PLATE = 3000, Q_GFX = 3050, Q_TEXT = 3100;
-const TEXT_Z = 6, GFX_Z = 3, LINK_Z = 6, LINK_DEPTH = 5;
-const CONTACT_Z = 8, CONTACT_DEPTH = 6;
+const TEXT_Z = 6, GFX_Z = 3, LINK_Z = 4, LINK_DEPTH = 4;
+const CONTACT_Z = 5, CONTACT_DEPTH = 4;
+const SHIELD_Z = 1, SHIELD_DEPTH = 1.6, SHIELD_PAD = 2;
 const CONTACT_PADS = [8, 4, 0];   // comfort margin, in card px, largest that still fits
-// A touch collider must stay entirely on its own face's side of the card: it sits Z px in
-// front of its face and is DEPTH px thick, so DEPTH < 2*Z or its back half pokes through to
-// the other face and steals that face's clicks. The card is under 0.2mm thick, so the two
-// faces' colliders would otherwise sit within a millimetre of each other and a physical
-// touch — which resolves by proximity, not by a ray — could pick either one.
-for (const [what, z, d] of [['link', LINK_Z, LINK_DEPTH], ['contact', CONTACT_Z, CONTACT_DEPTH]])
+// Every touch collider stays on its own face's side of the card — it sits Z px in front of
+// its face and is DEPTH px thick, so DEPTH < 2*Z. This keeps the boxes from poking out of
+// the far side when you visualise them; it does NOT stop a click reaching through (see the
+// shield comment below — nothing does, at this thickness). Shields must also sit NEARER the
+// card than the buttons of their own face, or they would shadow them.
+for (const [what, z, d] of [['link', LINK_Z, LINK_DEPTH], ['contact', CONTACT_Z, CONTACT_DEPTH],
+                            ['shield', SHIELD_Z, SHIELD_DEPTH]])
   if (d >= 2 * z) throw new Error(`${what} collider depth ${d} punches through the card at z=${z}`);
+if (SHIELD_Z + SHIELD_DEPTH / 2 >= Math.min(LINK_Z, CONTACT_Z) - Math.max(LINK_DEPTH, CONTACT_DEPTH) / 2)
+  throw new Error('shields reach out past this face\'s own buttons and would shadow them');
 const SIZE_GAIN = 10, LH_BASIS = 0.8 / 1.2;
 const ALIGN = { left:'Left', center:'Center', right:'Right', justify:'Justify', start:'Left', end:'Right' };
 const slug = t => (t.replace(/\s+/g,' ').trim().slice(0,24) || 'Text');
@@ -191,26 +195,51 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
       pf.component(CP.ContactLink, { UserId: process.env.DROPCARD_USERID || '' }).comp ],
     [ (t.x+t.w/2)-PX_W/2, -((t.y+t.h/2)-PX_H/2), -CONTACT_Z ]);
 
+  const contacts = { front: contactTargets('front'), back: faces.back ? contactTargets('back') : [] };
+
+  // Standing off from the card does NOT stop a click reaching the far face, and neither does
+  // putting plain geometry in the way: RaycastTouchSource walks EVERY hit in distance order
+  // and skips the ones with no ITouchable above them, giving up only once it is
+  // MaxTouchPenetrationDistance past the first hit — 10mm on the laser, 50mm by default.
+  // The card is 4mm deep, buttons included. Nothing inert can shadow anything.
+  //
+  // So each face carries a SHIELD: a TouchButton with no receivers, at the mirrored footprint
+  // of every button on the OTHER face, sitting nearer the card than this face's own buttons.
+  // It is the first touchable the ray meets there, and it does nothing, so the far face's
+  // add-contact is unreachable while this face's own buttons still win where they overlap.
+  // Only the far side's footprints are covered, so the rest of the card still reads as
+  // grabbable rather than as one card-sized button.
+  const shieldsFor = side => {
+    const other = side === 'front' ? 'back' : 'front';
+    if (!faces[other]) return [];
+    return [...contacts[other], ...(faces[other].links || [])]
+      .map(b => ({ x: PX_W - (b.x + b.w) - SHIELD_PAD, y: b.y - SHIELD_PAD,
+                   w: b.w + 2*SHIELD_PAD, h: b.h + 2*SHIELD_PAD }));
+  };
+
+  const shieldSlot = (b, i) => pf.makeSlot(`${String(i+1).padStart(2,'0')} shields the other face`,
+    [ pf.component(CP.BoxCollider, { Size:[D(b.w),D(b.h),D(SHIELD_DEPTH)], Type:'Static',
+        Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false }).comp,
+      pf.component(CP.TouchButton, { AcceptPhysicalTouch:true, AcceptRemoteTouch:true,
+        AcceptOutOfSightTouch:false }).comp ],
+    [ (b.x+b.w/2)-PX_W/2, -((b.y+b.h/2)-PX_H/2), -SHIELD_Z ]);
+
   const touchReport = [];
   function faceSlot(side, z, flip) {
     const f = faces[side]; if (!f) return null;
     const px = (name, kids) => { const r = pf.makeSlot(name, [], [0,0,0], kids);
       r.Scale.Data=[D(S),D(S),D(S)]; r.Rotation.Data=[D(0),D(1),D(0),D(0)]; return r; };
-    // The plate carries a collider of its own, with nothing touchable on it. It is a
-    // BACKSTOP: the card is thinner than a millimetre, so without it a click aimed at the
-    // front that misses the front's own buttons carries on into the back's, and you get the
-    // back's add-contact while looking at the front. This face is opaque to the other one.
     const kids = [ pf.makeSlot('Background',
-      [ ...texturedQuad(readFileSync(new URL(`./${prefix}-bg-${side}.png`, import.meta.url)),
-          { w:CARD_W, h:CARD_H, queue:Q_PLATE }),
-        pf.component(CP.BoxCollider, { Size:[D(CARD_W),D(CARD_H),D(2*S)], Type:'Static',
-          Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false }).comp ], [0,0,0]) ];
+      texturedQuad(readFileSync(new URL(`./${prefix}-bg-${side}.png`, import.meta.url)),
+        { w:CARD_W, h:CARD_H, queue:Q_PLATE }), [0,0,0]) ];
     if (f.gfx?.length)   kids.push(px('Graphics', f.gfx.map(gfxSlot(side))));
     if (f.layers.length) kids.push(px('Text', f.layers.map(textSlot)));
     if (f.links?.length) kids.push(px('Links', f.links.map(linkSlot)));
-    const ct = contactTargets(side);
+    const ct = contacts[side];
     if (ct.length) { touchReport.push(...ct.map(t => ({ side, ...t })));
                      kids.push(px('Add contact', ct.map(contactSlot))); }
+    const sh = shieldsFor(side);
+    if (sh.length) kids.push(px('Shields', sh.map(shieldSlot)));
     const s = pf.makeSlot(side==='front'?'Front':'Back', [], [0,0,z], kids);
     if (flip) s.Rotation.Data=[D(0),D(1),D(0),D(0)];
     return s;
@@ -220,7 +249,13 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
     pf.component(CP.ObjectRoot, {}).comp,
     pf.component(CP.Grabbable, { Scalable:true }).comp,
     pf.component(CP.BoxCollider, { Size:[D(CARD_W),D(CARD_H),D(COLLIDER_T)], Type:'Static', Mass:D(0.1) }).comp,
-  ], [0,0,0], [faceSlot('front', CARD_GAP/2, false), faceSlot('back', -CARD_GAP/2, true)].filter(Boolean),
+  // The FRONT faces -Z, which is what greets you on import. A spawned slot is given
+  // `rotation = LocalUserViewRotation` (SlotPositioning.PositionInFrontOfUser), and the view
+  // rotation's +Z points where you are looking — away from you. So +Z is the side you never
+  // see first, and a card whose front faced +Z always landed showing its back.
+  // Swapping the two (z, flip) pairs rotates the whole card; each face's own subtree turns
+  // with its plate, so nothing inside it is mirrored by this.
+  ], [0,0,0], [faceSlot('front', -CARD_GAP/2, true), faceSlot('back', CARD_GAP/2, false)].filter(Boolean),
      null);
 
   const noPic = Object.entries(faces)

@@ -44,7 +44,7 @@ function walk(s, R, P, S, depth) {
     const touch = comps.some(k => /TouchButton|Hyperlink/.test(T[k.Type]));
     let note = touch ? 'touchable' : 'inert';
     if (touch && lo <= 0 && hi >= 0) { note = '*** STRADDLES THE CARD PLANE ***'; bad++; }
-    console.log(`${'  '.repeat(depth)}${name.slice(0, 32).padEnd(34 - depth * 2)}` +
+    console.log(`${'  '.repeat(depth)}${name.padEnd(38 - depth * 2)} ` +
       `x=[${mm(world[0] - sz[0] / 2)}..${mm(world[0] + sz[0] / 2)}] ` +
       `y=[${mm(world[1] - sz[1] / 2)}..${mm(world[1] + sz[1] / 2)}] ` +
       `z=[${mm(lo)}..${mm(hi)}]  ${note}`);

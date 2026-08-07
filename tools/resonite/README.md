@@ -181,13 +181,26 @@ Each of these cost a round trip to find, so they are written down:
   920px on a 1000px card. Rendering from that is harmless (the glyphs are aligned inside it)
   but a collider cut to it is a band across the whole face. Take the box the glyphs actually
   occupy: a `Range` over the element's own text nodes, unioned over `getClientRects()`.
-- **Nothing stops a click at the far face.** The two plates are 0.1mm apart and a bare quad
-  has no collider, so a click aimed at the front that misses the front's own buttons carries
-  on and presses the back's. Two things keep the faces apart, and both are needed: each
-  plate carries an inert `BoxCollider` of its own as a backstop, and every touch collider
-  stands off far enough that `DEPTH < 2 * Z` — a build-time assertion in `build_batch.mjs`.
-  Standoff alone is not enough, because a physical touch resolves by proximity rather than by
-  a ray and will happily reach the nearer of two colliders a millimetre apart.
+- **A touch does not stop at the first collider, and inert geometry cannot shield anything.**
+  `RaycastTouchSource.GetTouchable` does a `PortalRaycastAll`, then walks the hits in distance
+  order looking for an `ITouchable` above each one, giving up only once a hit is
+  `MaxTouchPenetrationDistance` beyond the first — `0.01f` on `InteractionLaser`, `0.05f` by
+  default on `TouchSource`. That is 10-50mm through a card whose buttons span 4mm, so neither
+  standoff nor a plain collider on the plate keeps a click off the far face. Both were tried;
+  both failed.
+
+  What works is a **shield**: a `TouchButton` with no `IButtonPressReceiver` beside it, placed
+  at the mirrored footprint of every button on the other face and nearer the card than this
+  face's own buttons. It is the first touchable the ray meets there and it does nothing, so
+  the far face goes quiet while this face still wins where the two overlap. Shield only the
+  far side's footprints — a card-sized one would work too, but then the whole card reads as a
+  button. Grabbing is unaffected either way: `InteractionHandler.Grab` works off
+  `Laser.CurrentHit`, the nearest collider, not off the touchable, and the root's grab box is
+  nearer than any shield.
+- **An imported item lands showing its −Z side.** `SlotPositioning.PositionInFrontOfUser`
+  gives the spawned slot `rotation = LocalUserViewRotation`, and the view rotation's +Z points
+  where you are looking, i.e. away from you. A card whose front faced +Z therefore always
+  arrived back-first. The front sits at −Z for that reason.
 - **SVG text cannot become a `TextRenderer`** — the seals lay text around a circle with
   `<textPath>`. Those become their own image layer, never baked into the plate. Cloning one
   out for rastering drops inherited opacity, so the effective alpha rides on the tint.
