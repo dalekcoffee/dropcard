@@ -3,7 +3,7 @@
 // ButtonEvents subscribes the engine's Local* event family, so the impulse chain runs ONLY
 // on the pressing user's client (protoflux/engine-integration.md §3.3). That means LocalUser
 // inside this graph IS the person who clicked — no cross-user permission problem, and the
-// copy lands in their own hand. Writes replicate afterwards as ordinary deltas.
+// copy appears in front of THEIR head. Writes replicate afterwards as ordinary deltas.
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { Int32 } from 'bson';
@@ -20,14 +20,13 @@ const N = {
   SetParent:     PB + 'FrooxEngine.Slots.SetParent',
   SetActive:     PB + 'FrooxEngine.Slots.SetSlotActiveSelf',
   LocalUser:     PB + 'FrooxEngine.Users.LocalUser',
-  UserUserRoot:  PB + 'FrooxEngine.Users.UserUserRoot',
-  LeftHandPos:   PB + 'FrooxEngine.Users.Roots.LeftHandPosition',
-  RightHandPos:  PB + 'FrooxEngine.Users.Roots.RightHandPosition',
   BodyNodeSlot:  PB + 'FrooxEngine.Avatar.BodyNodeSlot',
-  Distance:      PB + 'Operators.Distance_Float3',
-  LessThan:      PB + 'Operators.ValueLessThan<float>',
-  CondNode:      PB + 'ValueConditional<[Renderite.Shared]Renderite.Shared.BodyNode>',
+  RootSlot:      PB + 'FrooxEngine.Slots.RootSlot',
+  LocalToGlobal: PB + 'FrooxEngine.Transform.LocalPointToGlobal',
+  GlobalXform:   PB + 'FrooxEngine.Transform.GlobalTransform',
+  SetGlobalPR:   PB + 'FrooxEngine.Transform.SetGlobalPositionRotation',
   InBodyNode:    PB + 'ValueInput<[Renderite.Shared]Renderite.Shared.BodyNode>',
+  InFloat3:      PB + 'ValueInput<float3>',
   InBool:        PB + 'ValueInput<bool>',
   RefButton:     GREF(`${FE}IButton`),
   RefSlot:       GREF(`${FE}Slot`),
@@ -54,11 +53,6 @@ const hexToRGB = h => { const s = h.replace('#','');
   const n = s.length === 3 ? [...s].map(c => c + c) : s.match(/../g);
   return n.map(v => parseInt(v, 16)); };
 const prefixArg = process.argv.slice(2).find(a => !a.startsWith('-')) || 'info-editorial';
-// --minimal drops the hand heuristic (distance/compare/conditional) and spawns straight
-// into the right hand. If minimal works and full doesn't, the hand maths is at fault;
-// if neither works, the button or the ButtonEvents binding is.
-const MINIMAL = process.argv.includes('--minimal');
-
 const { pf, asset, assets, embeds } = newEncoder();
 const D = pf.D;
 
@@ -86,10 +80,14 @@ const browser = await chromium.launch();
 const page = await (await browser.newContext({ viewport:{width:600,height:600},
   deviceScaleFactor:1 })).newPage();
 const card = await cardRoot(pf, asset, assets, embeds, prefixArg, job, page);
-card.root.Name.Data = 'Card Template — its transform IS the in-hand pose';
+card.root.Name.Data = 'Card Template — every dispensed card is a copy of this';
 card.root.Active.Data = false;          // the template itself never shows
-const PALM_OFFSET = [0, 0, 0];
-card.root.Position.Data = PALM_OFFSET.map(D);
+card.root.Position.Data = [0, 0, 0].map(D);   // placement is set explicitly on each copy
+
+// Where a dispensed card appears: straight out from the head, a little below eye line, in
+// the world rather than attached to anything. Parenting it to a hand only works if you have
+// a second hand free to take it off the first — which desktop users do not.
+const SPAWN_AHEAD = 0.45, SPAWN_BELOW = 0.12;   // metres
 
 // ── the button ─────────────────────────────────────────────────────────────
 // The card icon on a backing, in the card's own colours. Deliberately NOT card-shaped: it
@@ -179,22 +177,23 @@ const trueIn  = fnode(N.InBool, { Value:true },  'true');
 const falseIn = fnode(N.InBool, { Value:false }, 'false');
 const setAct  = fnode(N.SetActive, { Next:null, Instance:dup.f.Duplicate, Active:trueIn.id }, 'SetSlotActiveSelf');
 
-const me = fnode(N.LocalUser, {}, 'LocalUser');
-let handNodeSource;
-if (MINIMAL) {
-  handNodeSource = fnode(N.InBodyNode, { Value:'RightHand' }, 'RightHand (fixed)').id;
-} else {
-  const myRoot  = fnode(N.UserUserRoot, { User:me.id }, 'UserUserRoot');
-  const lPos    = fnode(N.LeftHandPos,  { UserRoot:myRoot.id }, 'LeftHandPosition');
-  const rPos    = fnode(N.RightHandPos, { UserRoot:myRoot.id }, 'RightHandPosition');
-  const dL      = fnode(N.Distance, { A:evt.f.GlobalPoint, B:lPos.id }, 'Distance to left hand');
-  const dR      = fnode(N.Distance, { A:evt.f.GlobalPoint, B:rPos.id }, 'Distance to right hand');
-  const leftWin = fnode(N.LessThan, { A:dL.id, B:dR.id }, 'left hand closer?');
-  const inL     = fnode(N.InBodyNode, { Value:'LeftHand' },  'LeftHand');
-  const inR     = fnode(N.InBodyNode, { Value:'RightHand' }, 'RightHand');
-  handNodeSource = fnode(N.CondNode, { Condition:leftWin.id, OnTrue:inL.id, OnFalse:inR.id }, 'pick hand').id;
-}
-const hand = fnode(N.BodyNodeSlot, { Source:me.id, Node:handNodeSource }, 'hand slot');
+const me   = fnode(N.LocalUser, {}, 'LocalUser');
+const head = fnode(N.BodyNodeSlot, { Source:me.id, Node:fnode(N.InBodyNode, { Value:'Head' }, 'Head').id },
+  'head slot');
+// One node does offset AND orientation: a point in the head's own frame, 0.45 ahead and
+// 0.12 down, converted to world. No vector maths, no separate forward direction.
+const where = fnode(N.LocalToGlobal, { Instance:head.id,
+  LocalPoint:fnode(N.InFloat3, { Value:[D(0), D(-SPAWN_BELOW), D(SPAWN_AHEAD)] }, 'in front of me').id },
+  'where to put it');
+// Facing: the card's front is its own -Z, so giving it the head's rotation points that front
+// straight back at the head. Same rotation, opposite side of the gap.
+const headX = fnode(N.GlobalXform, { Instance:head.id, GlobalPosition:null, GlobalRotation:null,
+  GlobalScale:null }, 'head orientation');
+// Into the WORLD, not under the dispenser: a duplicate defaults to a sibling of its template,
+// which would make every card ride along whenever the dispenser is picked up.
+const world = fnode(N.RootSlot, {}, 'world root');
+const place = fnode(N.SetGlobalPR, { Next:null, Instance:dup.f.Duplicate, Position:where.id,
+  Rotation:headX.f.GlobalRotation }, 'put it in front of me');
 
 // ── baking the owner's UserId into the template ─────────────────────────────
 // The card's ContactLink ships with UserId EMPTY: a card that hands out someone else's
@@ -234,12 +233,14 @@ const writes  = links.map((src, i) => fnode(N.WriteStr,
 wire(gate, 'OnTrue', writes[0].id);
 writes.forEach((w, i) => { if (writes[i+1]) wire(w, 'OnWritten', writes[i+1].id); });
 
-// impulse chain: press → duplicate → parent into the hand → make it visible
+// impulse chain: press → duplicate → into the world → position it → only THEN show it,
+// so nobody sees the copy at the world origin on the frame between reparenting and placing
 wire(evt,    'Pressed',   dup.id);
 wire(dup,    'Next',      setPar.id);
-wire(setPar, 'NewParent', hand.id);
-wire(setPar, 'Next',      setAct.id);
+wire(setPar, 'NewParent', world.id);
 wire(setPar, 'PreserveGlobalPosition', falseIn.id);
+wire(setPar, 'Next',      place.id);
+wire(place,  'Next',      setAct.id);
 
 // pretty-flux §2: laid out deliberately rather than dumped on a grid. Data flows
 // left→right on its own row, the impulse chain runs on a row below it, and every
@@ -249,15 +250,13 @@ wire(setPar, 'PreserveGlobalPosition', falseIn.id);
 const AT = {
   'Button ref':             [-1.40, -0.25], 'ButtonEvents':      [-1.16, -0.25],
   'Card template source':   [-0.92, -0.45], 'DuplicateSlot':     [-0.68, -0.25],
-  'SetParent':              [ 0.28, -0.25], 'true':              [ 0.28, -0.47],
-  'SetSlotActiveSelf':      [ 0.52, -0.25], 'false':             [ 0.06, -0.47],
-  'LocalUser':              [-1.40,  0.50], 'UserUserRoot':      [-1.16,  0.50],
-  'LeftHandPosition':       [-0.92,  0.64], 'RightHandPosition': [-0.92,  0.36],
-  'Distance to left hand':  [-0.68,  0.64], 'Distance to right hand': [-0.68, 0.36],
-  'left hand closer?':      [-0.44,  0.50],
-  'LeftHand':               [-0.44,  0.22], 'RightHand':         [-0.44,  0.08],
-  'RightHand (fixed)':      [-0.44,  0.15],
-  'pick hand':              [-0.20,  0.15], 'hand slot':         [ 0.04,  0.15],
+  'SetParent':              [ 0.28, -0.25], 'false':             [ 0.06, -0.47],
+  'put it in front of me':  [ 0.52, -0.25], 'true':              [ 0.76, -0.47],
+  'SetSlotActiveSelf':      [ 0.76, -0.25],
+  'LocalUser':              [-1.40,  0.30], 'Head':              [-1.16,  0.46],
+  'head slot':              [-0.92,  0.30], 'in front of me':    [-0.92,  0.58],
+  'where to put it':        [-0.68,  0.44], 'head orientation':  [-0.68,  0.16],
+  'world root':             [ 0.04,  0.02],
   // the bake, on its own band well below the dispense chain
   'Dispenser root source':  [-1.40,  1.20], 'who is holding this':   [-1.16, 1.20],
   'their user id':          [-0.92,  1.20], 'someone is holding it': [-0.92, 1.44],
@@ -283,8 +282,8 @@ const root = pf.makeSlot('dropcard dispenser', [
 // the dispenser's own slabs obey the same rule as the card's layers
 assertFacing(root, pf, 'dispenser');
 
-const r = await pf.exportPackage({ name:`dropcard dispenser${MINIMAL?' minimal':''} (${job.template})`, root,
-  assets, embeddedAssets:embeds, outPath:`out/dropcard_dispenser${MINIMAL?'_minimal':''}.resonitepackage`,
+const r = await pf.exportPackage({ name:`dropcard dispenser (${job.template})`, root,
+  assets, embeddedAssets:embeds, outPath:'out/dropcard_dispenser.resonitepackage',
   typeVersions:TV });
 console.log(`  nodes=${nodes.length}  card=${(card.CARD_W*1000).toFixed(0)}×${(card.CARD_H*1000).toFixed(0)}mm  ${r.ok?'ok':'DANGLING'}`);
 console.log(`  button: ${iconFile.replace('CardIcon','').replace('.svg','').toLowerCase()} icon, ` +

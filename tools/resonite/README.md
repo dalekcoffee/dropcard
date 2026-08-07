@@ -58,6 +58,31 @@ not compete for one collider: the button's collider carries `TouchButton` (`ITou
 there), while the handle's collider carries only geometry, so pointing at it grabs the whole
 object instead of pressing it.
 
+## Where a dispensed card appears
+
+**In the world, in front of the presser's head — not in their hand.** Handing it to a hand
+assumes a second hand free to take it off the first, which desktop players do not have.
+
+```
+BodyNodeSlot(LocalUser, Head) ─┬─► LocalPointToGlobal(0, -0.12, 0.45) ──► Position
+                               └─► GlobalTransform.GlobalRotation ─────► Rotation
+press ► DuplicateSlot ► SetParent(RootSlot) ► SetGlobalPositionRotation ► SetSlotActiveSelf
+```
+
+`LocalPointToGlobal` does offset and orientation in one node — a point in the head's own
+frame, 45cm ahead and 12cm below eye line, converted to world. No vector maths and no
+separate forward direction.
+
+Facing comes free: the card's front is its own −Z, so giving the copy the **head's** rotation
+points that front straight back at the head.
+
+The parent is `RootSlot`, deliberately. A duplicate defaults to a sibling of its template, so
+without this every dispensed card would sit inside the dispenser and ride along whenever
+somebody picked it up.
+
+Order matters — the copy is activated **after** it is placed, otherwise there is a frame where
+it sits at the world origin in plain view.
+
 ## The dispenser's button
 
 The button face is one of two card icons (`icons/`, landscape and diagonal) on a backing,
@@ -228,10 +253,10 @@ Each of these cost a round trip to find, so they are written down:
   number. The dispenser's button face was at 2000 and did exactly this.
 - **`Uri` fields serialise as a plain string with an `@` prefix** — `"@https://…"`.
 - **`SetParent.PreserveGlobalPosition` is `[DefaultValue(true)]`.** Leave that input unbound
-  and the reparented slot keeps its WORLD transform — it becomes a child of the hand but
-  never moves, then trails it from across the room. Wire an explicit `ValueInput<bool>` =
-  false, and the copy snaps into the parent's frame; its LOCAL transform then decides where
-  it sits, so the template's own position is the in-hand offset.
+  and the reparented slot keeps its WORLD transform instead of snapping into the new parent's
+  frame. Wire an explicit `ValueInput<bool>` = false. (Placement no longer relies on this —
+  `SetGlobalPositionRotation` sets the pose outright — but the default still bites anything
+  that reparents.)
 - **Reading a scene element into a graph takes a PROXY PAIR, on one slot.**
   `ChangeableSource<E,T>.Source` is a `GlobalRef<E>` — it points at an
   `IGlobalValueProxy`, *not* at the element. So `DuplicateSlot.Template` needs:
