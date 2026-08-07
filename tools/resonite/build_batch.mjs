@@ -117,7 +117,23 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
         if (names.includes(t)) out.push({ ...L, what: 'name' });
       }
     }
-    for (const g of f.gfx || []) if (g.isAvatar) out.push({ ...g, what: 'avatar' });
+    // The avatar region is a contact target whether or not a picture was set — with none,
+    // templates still draw a placeholder inside the frame, so there is something to aim at.
+    if (f.avatar) {
+      const a = f.avatar;
+      // a placeholder glyph is small; grow it into a comfortable target, but only as far as
+      // the nearest other clickable/drawn item allows, so it can never cover one
+      let box = { ...a };
+      if (a.isGlyph) {
+        const GROW = 1.9, CAP = 260;
+        const w = Math.min(a.w * GROW, CAP), h = Math.min(a.h * GROW, CAP);
+        box = { x: a.x + a.w/2 - w/2, y: a.y + a.h/2 - h/2, w, h };
+        const hits = (r) => !(box.x+box.w < r.x || r.x+r.w < box.x || box.y+box.h < r.y || r.y+r.h < box.y);
+        const clash = [...(f.layers||[]), ...(f.gfx||[]), ...(f.links||[])].some(hits);
+        if (clash) box = { ...a };          // fall back to the glyph itself rather than overlap
+      }
+      out.push({ ...box, what: a.hasImage ? 'photo' : 'photo (placeholder)' });
+    }
     return out;
   };
 
@@ -155,7 +171,12 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
   ], [0,0,0], [faceSlot('front', CARD_GAP/2, false), faceSlot('back', -CARD_GAP/2, true)].filter(Boolean),
      null);
 
-  return { root, CARD_W, CARD_H, S, fonts };
+  const noPic = Object.entries(faces)
+    .filter(([, f]) => f.avatar && !f.avatar.hasImage).map(([side]) => side);
+  if (noPic.length)
+    console.log(`     ! no profile picture on the ${noPic.join(' and ')} — the add-contact ` +
+                `target is the empty placeholder frame. Import or upload an avatar for a real one.`);
+  return { root, CARD_W, CARD_H, S, fonts, noPic };
 }
 
 export { TV, CP, LONG_EDGE, CARD_GAP, COLLIDER_T };

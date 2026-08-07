@@ -117,7 +117,29 @@ for (const job of JOBS) {
         gfx.push({ x:r.x-R.x, y:r.y-R.y, w:r.width, h:r.height, alpha,
                    name:(e.textContent||'').trim().replace(/\s+/g,' ').slice(0,24)||e.tagName.toLowerCase() });
       });
-      return { card:{ w:R.width, h:R.height }, layers:out, links, gfx };
+      // The avatar region, whether or not a picture was set. A real avatar is an <img>;
+      // with none, templates draw a placeholder icon-font glyph (ph-user) inside the frame,
+      // and the FRAME is what we want — the glyph is only 82px inside a 282x250 box.
+      let avatar = null;
+      const img = [...root.querySelectorAll('img')]
+        .map(e => ({ e, r: e.getBoundingClientRect() }))
+        .filter(o => o.r.width > 24 && o.r.height > 24)
+        .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height)[0];
+      if (img) {
+        avatar = { x:img.r.x-R.x, y:img.r.y-R.y, w:img.r.width, h:img.r.height, hasImage:true };
+      } else {
+        // Use the GLYPH's own box, not its parent: the parent is the avatar frame in some
+        // templates but a whole layout column in others (Editorial gives 360x625 on a
+        // 1000x625 card, which would swallow half the face). The glyph is centred in the
+        // frame, so a modest symmetric expansion stays inside it whatever the template.
+        const icon = root.querySelector('i[class*="ph-user"], i[class*="ph-person"], i[class*="ph-image"]');
+        if (icon) {
+          const r = icon.getBoundingClientRect();
+          if (r.width > 16 && r.height > 16)
+            avatar = { x:r.x-R.x, y:r.y-R.y, w:r.width, h:r.height, hasImage:false, isGlyph:true };
+        }
+      }
+      return { card:{ w:R.width, h:R.height }, layers:out, links, gfx, avatar };
     }, id);
 
     for (let g=0; g<data.gfx.length; g++) {
@@ -148,7 +170,7 @@ for (const job of JOBS) {
   all[job.prefix]={ ...job, faces, fields:fieldVals };
   const f=faces.front, k=faces.back;
   console.log(`${job.prefix.padEnd(16)} ${job.template.padEnd(13)} ${job.content.padEnd(6)} fields=${String(touched).padStart(2)}  ` +
-              `card=${f.card.w}x${f.card.h} front(${f.layers.length}t/${f.gfx.length}g) back(${k?k.layers.length:0}t/${k?k.links.length:0}l)`);
+              `card=${f.card.w}x${f.card.h} front(${f.layers.length}t/${f.gfx.length}g${f.avatar?(f.avatar.hasImage?'/pic':'/NOPIC'):''}) back(${k?k.layers.length:0}t/${k?k.links.length:0}l)`);
 }
 writeFileSync('batch-layers.json', JSON.stringify(all, null, 1));
 await b.close();
