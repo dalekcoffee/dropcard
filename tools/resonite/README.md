@@ -18,7 +18,14 @@ node build_card.mjs                   # → out/dropcard_Sample_baked.resonitepa
 
 node batch.mjs                        # several templates in one browser session
 node build_batch.mjs                  # → one package per captured template
+
+node verify_colliders.mjs out/dropcard_info-editorial.resonitepackage
 ```
+
+`verify_colliders.mjs` decodes a built package and prints every collider in world-space
+millimetres, failing if a touchable one straddles the card plane. Run it on anything you are
+about to hand someone: collider faults are invisible in a render and only show up when the
+card is in someone's hands.
 
 `extract.mjs` drives Chromium through Playwright (`/opt/pw-browsers`, preinstalled).
 
@@ -62,6 +69,12 @@ hover. No template edits needed: the exporter finds the name by matching the `na
 `nickname` field values against captured text runs, and the avatar by matching the `<img>`
 src. Element colour/font/size are already captured, so the overlay can be drawn in each
 template's own theme.
+
+A target may be **bigger than its element, never overlapping its neighbours**. The builder
+takes the glyph box, tries pads of 8 / 4 / 0 card px and keeps the largest that clears every
+other text run and social chip on that face, then trims against anything still in the way and
+clamps to the card edge. The placeholder frame gets the same treatment from the other end: the
+icon glyph is small, so it grows 1.9x (capped at 260px) unless that would touch something.
 
 **Hover and click can share one collider.** Two `ITouchable`s cannot —
 `RaycastTouchSource` takes a single `GetComponentInParentsUntilBlock` — but they don't need
@@ -163,6 +176,18 @@ Each of these cost a round trip to find, so they are written down:
 - **Not every family a card names is on Google Fonts** (templates set system faces like
   Courier New). `fetchfont.mjs` accepts `format('truetype')` URLs as well as `.ttf` ones and
   substitutes mono/serif/sans equivalents rather than failing the build.
+- **A text element's rect is its LAYOUT box, not its text.** `getBoundingClientRect` on a
+  block-level heading returns the full width of its column — Editorial's back name measures
+  920px on a 1000px card. Rendering from that is harmless (the glyphs are aligned inside it)
+  but a collider cut to it is a band across the whole face. Take the box the glyphs actually
+  occupy: a `Range` over the element's own text nodes, unioned over `getClientRects()`.
+- **Nothing stops a click at the far face.** The two plates are 0.1mm apart and a bare quad
+  has no collider, so a click aimed at the front that misses the front's own buttons carries
+  on and presses the back's. Two things keep the faces apart, and both are needed: each
+  plate carries an inert `BoxCollider` of its own as a backstop, and every touch collider
+  stands off far enough that `DEPTH < 2 * Z` — a build-time assertion in `build_batch.mjs`.
+  Standoff alone is not enough, because a physical touch resolves by proximity rather than by
+  a ray and will happily reach the nearer of two colliders a millimetre apart.
 - **SVG text cannot become a `TextRenderer`** — the seals lay text around a circle with
   `<textPath>`. Those become their own image layer, never baked into the plate. Cloning one
   out for rastering drops inherited opacity, so the effective alpha rides on the tint.

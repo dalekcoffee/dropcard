@@ -90,12 +90,23 @@ for (const job of JOBS) {
 
     const data = await p.evaluate((id) => {
       const root=document.getElementById(id), R=root.getBoundingClientRect(), out=[];
+      // The ELEMENT box is what the text is laid out in — often a full-width block, so a
+      // collider cut to it spans the whole card. Range rects give the box the GLYPHS
+      // actually occupy, which is what anything clickable has to be sized from.
+      const tightBox=c=>{ const rects=[];
+        for(const n of c.childNodes){ if(n.nodeType!==3 || !n.textContent.trim()) continue;
+          const rg=document.createRange(); rg.selectNodeContents(n);
+          for(const r of rg.getClientRects()) if(r.width>0 && r.height>0) rects.push(r); }
+        if(!rects.length) return null;
+        const x0=Math.min(...rects.map(r=>r.left)), y0=Math.min(...rects.map(r=>r.top));
+        const x1=Math.max(...rects.map(r=>r.right)), y1=Math.max(...rects.map(r=>r.bottom));
+        return { x:x0-R.x, y:y0-R.y, w:x1-x0, h:y1-y0 }; };
       const walk=el=>{ for(const c of el.children){
         const own=[...c.childNodes].filter(n=>n.nodeType===3).map(n=>n.textContent).join('').trim();
         const r=c.getBoundingClientRect(), cs=getComputedStyle(c);
         if(own && !c.closest('svg') && r.width>0 && r.height>0 && cs.visibility!=='hidden' && +cs.opacity>0){
           const m=/rgba?\(([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+))?/.exec(cs.color)||[];
-          out.push({ text:own, x:r.x-R.x, y:r.y-R.y, w:r.width, h:r.height,
+          out.push({ text:own, x:r.x-R.x, y:r.y-R.y, w:r.width, h:r.height, tight:tightBox(c),
             family:(cs.fontFamily.split(',')[0]||'').trim().replace(/^["']|["']$/g,''),
             fontPx:parseFloat(cs.fontSize), weight:parseInt(cs.fontWeight)||400, align:cs.textAlign,
             lineHeight:parseFloat(cs.lineHeight)||parseFloat(cs.fontSize)*1.2,

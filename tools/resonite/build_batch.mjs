@@ -18,8 +18,16 @@ const TV = { [CP.Grabbable]:2, [CP.BoxCollider]:1, [CP.QuadMesh]:1, [CP.TextRend
 const LONG_EDGE = 0.1712;   // the card's long side, whatever its orientation
 const CARD_GAP = 0.0001, COLLIDER_T = 0.002;
 const Q_PLATE = 3000, Q_GFX = 3050, Q_TEXT = 3100;
-const TEXT_Z = 6, GFX_Z = 3, LINK_Z = 4, LINK_DEPTH = 8;
-const CONTACT_Z = 5, CONTACT_DEPTH = 8;
+const TEXT_Z = 6, GFX_Z = 3, LINK_Z = 6, LINK_DEPTH = 5;
+const CONTACT_Z = 8, CONTACT_DEPTH = 6;
+const CONTACT_PADS = [8, 4, 0];   // comfort margin, in card px, largest that still fits
+// A touch collider must stay entirely on its own face's side of the card: it sits Z px in
+// front of its face and is DEPTH px thick, so DEPTH < 2*Z or its back half pokes through to
+// the other face and steals that face's clicks. The card is under 0.2mm thick, so the two
+// faces' colliders would otherwise sit within a millimetre of each other and a physical
+// touch — which resolves by proximity, not by a ray — could pick either one.
+for (const [what, z, d] of [['link', LINK_Z, LINK_DEPTH], ['contact', CONTACT_Z, CONTACT_DEPTH]])
+  if (d >= 2 * z) throw new Error(`${what} collider depth ${d} punches through the card at z=${z}`);
 const SIZE_GAIN = 10, LH_BASIS = 0.8 / 1.2;
 const ALIGN = { left:'Left', center:'Center', right:'Right', justify:'Justify', start:'Left', end:'Right' };
 const slug = t => (t.replace(/\s+/g,' ').trim().slice(0,24) || 'Text');
@@ -109,13 +117,45 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
   // the instancer bakes it in once it knows who owns the card.
   const contactTargets = (side) => {
     const f = faces[side], out = [];
+    // A text run's ELEMENT box is its layout box, routinely the full width of the card or
+    // column; sizing a collider to that gives a band across the face that swallows the
+    // social chips. `tight` is the box the glyphs actually occupy.
+    const glyphBox = L => L.tight || { x:L.x, y:L.y, w:L.w, h:L.h };
+    const grow = (b, p) => ({ x:b.x-p, y:b.y-p, w:b.w+2*p, h:b.h+2*p });
+    const hit = (a, b) => a.x < b.x+b.w && b.x < a.x+a.w && a.y < b.y+b.h && b.y < a.y+a.h;
+    // trim b just far enough on its least-buried side to clear o
+    const clip = (b, o) => {
+      const cut = [[o.x+o.w-b.x,'L'], [b.x+b.w-o.x,'R'], [o.y+o.h-b.y,'T'], [b.y+b.h-o.y,'B']]
+        .sort((p, q) => p[0]-q[0])[0];
+      if (cut[0] <= 0) return b;
+      if (cut[1]==='L') return { ...b, x:b.x+cut[0], w:b.w-cut[0] };
+      if (cut[1]==='R') return { ...b, w:b.w-cut[0] };
+      if (cut[1]==='T') return { ...b, y:b.y+cut[0], h:b.h-cut[0] };
+      return { ...b, h:b.h-cut[0] };
+    };
+    // Comfortable but never overlapping: take the largest pad that clears every neighbour,
+    // and if even the bare box collides, trim it. Colliders may be bigger than their
+    // element; they may not reach into the next one.
+    const fit = (base, near) => {
+      for (const p of CONTACT_PADS) {
+        const b = grow(base, p);
+        if (!near.some(o => hit(b, o))) return b;
+      }
+      let b = { ...base };
+      for (const o of near) if (hit(b, o)) b = clip(b, o);
+      return (b.w > 8 && b.h > 8) ? b : null;
+    };
+
     const names = [job.fields?.Name, job.fields?.Nickname]
       .filter(Boolean).map(v => v.trim().toLowerCase());
+    const texts = (f.layers || []).map(glyphBox);
     if (names.length) {
-      for (const L of f.layers || []) {
-        const t = L.text.trim().toLowerCase();
-        if (names.includes(t)) out.push({ ...L, what: 'name' });
-      }
+      (f.layers || []).forEach((L, i) => {
+        if (!names.includes(L.text.trim().toLowerCase())) return;
+        const near = [...texts.filter((_, j) => j !== i), ...(f.links || []), ...out];
+        const b = fit(glyphBox(L), near);
+        if (b) out.push({ ...b, what:'name' });
+      });
     }
     // The avatar region is a contact target whether or not a picture was set — with none,
     // templates still draw a placeholder inside the frame, so there is something to aim at.
@@ -127,14 +167,18 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
       if (a.isGlyph) {
         const GROW = 1.9, CAP = 260;
         const w = Math.min(a.w * GROW, CAP), h = Math.min(a.h * GROW, CAP);
-        box = { x: a.x + a.w/2 - w/2, y: a.y + a.h/2 - h/2, w, h };
-        const hits = (r) => !(box.x+box.w < r.x || r.x+r.w < box.x || box.y+box.h < r.y || r.y+r.h < box.y);
-        const clash = [...(f.layers||[]), ...(f.gfx||[]), ...(f.links||[])].some(hits);
-        if (clash) box = { ...a };          // fall back to the glyph itself rather than overlap
+        const wide = { x: a.x + a.w/2 - w/2, y: a.y + a.h/2 - h/2, w, h };
+        const clash = [...texts, ...(f.gfx||[]), ...(f.links||[]), ...out].some(r => hit(wide, r));
+        if (!clash) box = wide;             // otherwise stay on the glyph rather than overlap
       }
-      out.push({ ...box, what: a.hasImage ? 'photo' : 'photo (placeholder)' });
+      if (!out.some(o => hit(box, o)))
+        out.push({ ...box, what: a.hasImage ? 'photo' : 'photo (placeholder)' });
     }
-    return out;
+    // and never off the edge of the card, where a click would land on nothing
+    const W = f.card.w, H = f.card.h;
+    return out.map(t => { const x = Math.max(0, t.x), y = Math.max(0, t.y);
+      return { ...t, x, y, w: Math.min(t.w + t.x - x, W - x), h: Math.min(t.h + t.y - y, H - y) };
+    }).filter(t => t.w > 8 && t.h > 8);
   };
 
   const contactSlot = (t, i) => pf.makeSlot(`${String(i+1).padStart(2,'0')} add contact — ${t.what}`,
@@ -147,18 +191,26 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
       pf.component(CP.ContactLink, { UserId: process.env.DROPCARD_USERID || '' }).comp ],
     [ (t.x+t.w/2)-PX_W/2, -((t.y+t.h/2)-PX_H/2), -CONTACT_Z ]);
 
+  const touchReport = [];
   function faceSlot(side, z, flip) {
     const f = faces[side]; if (!f) return null;
     const px = (name, kids) => { const r = pf.makeSlot(name, [], [0,0,0], kids);
       r.Scale.Data=[D(S),D(S),D(S)]; r.Rotation.Data=[D(0),D(1),D(0),D(0)]; return r; };
+    // The plate carries a collider of its own, with nothing touchable on it. It is a
+    // BACKSTOP: the card is thinner than a millimetre, so without it a click aimed at the
+    // front that misses the front's own buttons carries on into the back's, and you get the
+    // back's add-contact while looking at the front. This face is opaque to the other one.
     const kids = [ pf.makeSlot('Background',
-      texturedQuad(readFileSync(new URL(`./${prefix}-bg-${side}.png`, import.meta.url)),
-        { w:CARD_W, h:CARD_H, queue:Q_PLATE }), [0,0,0]) ];
+      [ ...texturedQuad(readFileSync(new URL(`./${prefix}-bg-${side}.png`, import.meta.url)),
+          { w:CARD_W, h:CARD_H, queue:Q_PLATE }),
+        pf.component(CP.BoxCollider, { Size:[D(CARD_W),D(CARD_H),D(2*S)], Type:'Static',
+          Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false }).comp ], [0,0,0]) ];
     if (f.gfx?.length)   kids.push(px('Graphics', f.gfx.map(gfxSlot(side))));
     if (f.layers.length) kids.push(px('Text', f.layers.map(textSlot)));
     if (f.links?.length) kids.push(px('Links', f.links.map(linkSlot)));
     const ct = contactTargets(side);
-    if (ct.length) kids.push(px('Add contact', ct.map(contactSlot)));
+    if (ct.length) { touchReport.push(...ct.map(t => ({ side, ...t })));
+                     kids.push(px('Add contact', ct.map(contactSlot))); }
     const s = pf.makeSlot(side==='front'?'Front':'Back', [], [0,0,z], kids);
     if (flip) s.Rotation.Data=[D(0),D(1),D(0),D(0)];
     return s;
@@ -176,7 +228,7 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job) {
   if (noPic.length)
     console.log(`     ! no profile picture on the ${noPic.join(' and ')} — the add-contact ` +
                 `target is the empty placeholder frame. Import or upload an avatar for a real one.`);
-  return { root, CARD_W, CARD_H, S, fonts, noPic };
+  return { root, CARD_W, CARD_H, S, fonts, noPic, touchReport };
 }
 
 export { TV, CP, LONG_EDGE, CARD_GAP, COLLIDER_T };
@@ -202,5 +254,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       assets, embeddedAssets:embeds, outPath:`out/dropcard_${prefix}.resonitepackage`, typeVersions:TV });
     console.log(`   ${job.template} ${(c.CARD_W*1000).toFixed(0)}×${(c.CARD_H*1000).toFixed(0)}mm  ` +
                 `fonts=${c.fonts.size} embeds=${embeds.length} ${r.ok?'ok':'DANGLING'}`);
+    for (const t of c.touchReport)
+      console.log(`     contact ${t.side.padEnd(5)} ${t.what.padEnd(20)} ` +
+                  `${t.w.toFixed(0)}×${t.h.toFixed(0)}px at ${t.x.toFixed(0)},${t.y.toFixed(0)}`);
   }
 }
