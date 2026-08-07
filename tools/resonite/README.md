@@ -53,10 +53,13 @@ installer UI**: the space above a player's head is already crowded and laid out 
 for everyone, so anything that placed itself there would fight whatever they already run.
 The dispenser is a grabbable object and the user parents it wherever they want.
 
-That is why the root carries `Grabbable` and a separate **Handle** tab. Grab and click must
-not compete for one collider: the button's collider carries `TouchButton` (`ITouchable` wins
-there), while the handle's collider carries only geometry, so pointing at it grabs the whole
-object instead of pressing it.
+The root carries `Grabbable`, and the button is the whole object — there is no separate grab
+tab. An earlier version had one, on the theory that a `TouchButton` would swallow the grab.
+It does not: **grab is a different input from press, and it never consults the touchable.**
+`InteractionHandler.Grab` resolves through `Laser.CurrentHit`, the CLOSEST collider, then
+walks up for an `IGrabbable`; the touchable only matters if it is an `ITouchGrabbable`, which
+`TouchButton` is not. Pointing anywhere on the button and pressing grab picks up the whole
+dispenser.
 
 ## Where a dispensed card appears
 

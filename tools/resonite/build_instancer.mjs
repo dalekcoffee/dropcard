@@ -144,25 +144,12 @@ const touch = pf.component(TOUCH_BUTTON, {
 const buttonSlot = pf.makeSlot('Button — press me', [btnCol.comp, touch.comp], [0,0,0],
   [ slab(faceMat, 0.0005, false, 'Face'), slab(faceMat, -0.0005, true, 'Back') ]);
 
-// Grab handle: a tab down the left edge with a collider but NO touchable, so pointing at it
-// grabs the whole dispenser while the button face still takes clicks.
-const HANDLE_W = 0.022;
-const handleMat = asset(CARD_CP.Unlit, {
-  TintColor:[D(0.09),D(0.09),D(0.15),D(1),'sRGB'], BlendMode:'Opaque', AlphaCutoff:D(0.5),
-  UseVertexColors:false, ZWrite:'On', RenderQueue:new Int32(2000) });
-assets.push(handleMat.entry);
-const handleSlab = (z, flip, name) => {
-  const q = pf.component(CARD_CP.QuadMesh, { Rotation:[D(0),D(flip?0:1),D(0),D(flip?1:0)],
-    Size:[D(HANDLE_W),D(BTN_H)], UVOffset:[D(0),D(0)], UVScale:[D(1),D(1)], ScaleUVWithSize:false });
-  const r = pf.component(CARD_CP.MeshRenderer, { Mesh:q.id, Materials:pf.list([handleMat.id]),
-    MaterialPropertyBlocks:[], ShadowCastMode:'On', SortingOrder:new Int32(0) });
-  return pf.makeSlot(name, [q.comp, r.comp], [0,0,z]);
-};
-const handleSlot = pf.makeSlot('Handle — grab here to place it', [
-  pf.component(CARD_CP.BoxCollider, { Size:[D(HANDLE_W),D(BTN_H),D(0.012)], Type:'Static',
-    Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false }).comp,
-], [-(BTN_W/2 + HANDLE_W/2 + 0.004), 0, 0],
-  [ handleSlab(0.0005, false, 'Face'), handleSlab(-0.0005, true, 'Back') ]);
+// No separate grab handle. It was there on the theory that a TouchButton would swallow the
+// grab, and that is not how the engine works: grab is a different input, and Grab() resolves
+// through `Laser.CurrentHit` — the CLOSEST collider — then walks up for an IGrabbable
+// (InteractionHandler.Grab). Touchables never enter that path unless they are ITouchGrabbable,
+// which TouchButton is not. So pointing anywhere on the button and pressing grab picks up the
+// whole dispenser, and the tab was only ever a black bar stuck to the side.
 
 // ── the graph ───────────────────────────────────────────────────────────────
 const refBtn  = fnode(N.RefButton,  { Reference: touch.id }, 'Button ref');
@@ -277,7 +264,7 @@ const fluxSlot = pf.makeSlot('ProtoFlux', [], [0, -0.55, 0],
 const root = pf.makeSlot('dropcard dispenser', [
   pf.component(CARD_CP.ObjectRoot, {}).comp,
   pf.component(CARD_CP.Grabbable, { Scalable:true }).comp,
-], [0,0,0], [buttonSlot, handleSlot, card.root, fluxSlot], null, pf.rootId);
+], [0,0,0], [buttonSlot, card.root, fluxSlot], null, pf.rootId);
 
 // the dispenser's own slabs obey the same rule as the card's layers
 assertFacing(root, pf, 'dispenser');
