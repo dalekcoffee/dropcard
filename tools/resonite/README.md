@@ -335,7 +335,15 @@ Each of these cost a round trip to find, so they are written down:
   included. The sun then reads as occluded by the parts of the object that are not there and
   ghosts a copy of itself at every transparent edge. It looks like god rays and it is a queue
   number. The dispenser's button face was at 2000 and did exactly this.
-- **`Uri` fields serialise as a plain string with an `@` prefix** — `"@https://…"`.
+- **`Uri` fields serialise as a plain string with an `@` prefix** — `"@https://…"` — and that
+  makes a leading `@` STRUCTURAL. `DataTreeValue.IsURL` is true for any string starting with a
+  single `@`, and `Extract<string>` **throws** on one ("is an URL, not a raw string"), so the
+  field never loads and whatever drew it draws nothing. A plain string beginning with `@` has
+  to be escaped by doubling it, exactly as `DataTreeValue.PreprocessString` does on the way
+  out. This cost a silently missing social handle: `"@SampleVT"` was written raw, read back as
+  a URL, and its `TextRenderer` rendered empty — on every card, from the very first build.
+  `protoflux.mjs` now escapes on write, telling a real URL apart by its scheme, and
+  `verify.mjs` fails on any bare-`@` string that is not one.
 - **`SetParent.PreserveGlobalPosition` is `[DefaultValue(true)]`.** Leave that input unbound
   and the reparented slot keeps its WORLD transform instead of snapping into the new parent's
   frame. Wire an explicit `ValueInput<bool>` = false. (Placement no longer relies on this —

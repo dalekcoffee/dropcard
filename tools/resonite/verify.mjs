@@ -35,8 +35,27 @@ const d = f => (f && typeof f === 'object' && 'Data' in f) ? f.Data : f;
 const flipped = r => Math.abs(r[1] - 1) < 1e-6 && Math.abs(r[3]) < 1e-6;
 const apply = (f, p) => f ? [-p[0], p[1], -p[2]] : p;
 const mm = n => (n * 1000).toFixed(2);
+const short = t => t.replace(/\[[^\]]*\]/g, '');
 
-let bad = 0, mirrored = 0;
+let bad = 0, mirrored = 0, unescaped = 0;
+// A string field starting with a SINGLE '@' reads back as a URL and Extract<string> throws on
+// it, so the field never loads. Deliberate URLs carry a scheme; anything else with a bare '@'
+// is a text value that will silently vanish in-world.
+const URL_LIKE = /^@[a-zA-Z][a-zA-Z0-9+.-]*:/;
+(function strings(s, path) {
+  for (const c of d(s.Components) ?? [])
+    for (const [k, v] of Object.entries(c.Data)) {
+      const val = d(v);
+      if (typeof val === 'string' && val.length > 1 && val[0] === '@' && val[1] !== '@'
+          && !URL_LIKE.test(val)) {
+        console.log(`${path}/${d(s.Name)} ${short(T[c.Type])}.${k} = ${JSON.stringify(val)}` +
+                    '  *** reads back as a URL — this field will not load ***');
+        unescaped++;
+      }
+    }
+  for (const c of (Array.isArray(s.Children) ? s.Children : d(s.Children)) ?? [])
+    strings(c, `${path}/${d(s.Name)}`);
+})(doc.Object, '');
 const isY180 = r => Math.abs(r[1] - 1) < 1e-6 && Math.abs(r[3]) < 1e-6;
 // mesh id -> its own rotation, so a MeshRenderer can be resolved to the quad it draws
 const quadRot = new Map();
@@ -90,9 +109,11 @@ function walk(s, R, P, S, depth, onFace = false) {
     walk(c, netR, world, netS, depth + 1, onFace);
 }
 walk(doc.Object, false, [0, 0, 0], [1, 1, 1], 0);
-if (bad || mirrored) {
+if (bad || mirrored || unescaped) {
+  if (unescaped) console.error(`${unescaped} string field(s) start with a bare '@' and will not load`);
   if (bad) console.error(`\n${bad} touchable collider(s) reach through to the other face`);
   if (mirrored) console.error(`${mirrored} element(s) face away from their own side and will read mirrored`);
   process.exit(1);
 }
-console.log(`\nok — ${quadRot.size} quads, no collider reaches the far face, nothing mirrored`);
+console.log(`\nok — ${quadRot.size} quads, no collider reaches the far face, nothing mirrored, ` +
+            'no string field misreads as a URL');

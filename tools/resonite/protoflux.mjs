@@ -45,7 +45,17 @@ export function ProtoFlux() {
   // ── value helpers ──────────────────────────────────────────────────────────
   const D = (n) => new Double(n);
   const vec = (...xs) => xs.map(D);                 // float2/3/4/Q/colorX components (append a profile string yourself for colorX)
-  const fd = (data) => ({ ID: nextId(), Data: data });          // {ID,Data} field wrapper
+  // A leading '@' marks a URL in the data tree: DataTreeValue.IsURL is true for any string
+  // starting with a single '@', and Extract<string> THROWS on one ("is an URL, not a raw
+  // string"). So a plain string beginning with '@' has to be escaped by doubling it, which is
+  // exactly what DataTreeValue.PreprocessString does on the way out. Without this a handle
+  // like "@SampleVT" fails to load and its TextRenderer draws nothing at all.
+  // Deliberate URLs keep their single '@' — they always carry a scheme ("@https://",
+  // "@packdb:///"), which is what tells the two apart.
+  const URL_LIKE = /^@[a-zA-Z][a-zA-Z0-9+.-]*:/;
+  const escapeDataTree = (v) =>
+    (typeof v === 'string' && v.length > 1 && v[0] === '@' && !URL_LIKE.test(v)) ? '@' + v : v;
+  const fd = (data) => ({ ID: nextId(), Data: escapeDataTree(data) });   // {ID,Data} field wrapper
   const fi = (n) => ({ ID: nextId(), Data: new Int32(n) });     // Int32 field (byte/int)
   const longField = (n) => ({ ID: nextId(), Data: Long.fromNumber(n) });
   // variadic field value: an array of {ID,Data} sub-edges (Operands/Inputs/Calls/ValueOutputs)
