@@ -18,6 +18,7 @@ Steps, in order:
   01  brand + head   OshiCard -> dropcard; title, description, canonical, OG/Twitter tags
   02  fonts          Google Fonts off until opted in (a raw export always fetches on load)
   03  sanitize       fediverse import: DOMParser bio stripping, URL and host allowlists
+  04  import defaults an import fills what it can and leaves every other slot on its sample
 
 Afterwards, run the verification in tools/patch/README.md. Eyeballing is not enough — the
 font gate and the sanitizers both have browser tests, and both failures are invisible.
@@ -33,6 +34,7 @@ STEPS = [
     ("01_brand_and_head.py", "brand + page identity"),
     ("02_google_fonts_optin.py", "Google Fonts opt-in"),
     ("03_sanitize_import.py", "fediverse input sanitization"),
+    ("04_import_keeps_defaults.py", "import leaves unfilled fields alone"),
 ]
 # a cheap "has this already been patched?" probe — added by step 03
 ALREADY = "const SAFE_URL"
