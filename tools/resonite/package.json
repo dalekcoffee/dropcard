@@ -1,18 +1,16 @@
 {
-  "name": "reso",
+  "name": "dropcard-resonite-export",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Build tools that turn a rendered dropcard into a .resonitepackage.",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "license": "UNLICENSED",
   "dependencies": {
     "brotli-wasm": "^3.0.1",
     "bson": "^7.3.1",
     "jszip": "^3.10.1",
     "pngjs": "^7.0.0"
-  }
+  },
+  "private": true
 }

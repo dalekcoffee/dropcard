@@ -421,9 +421,9 @@ Each of these cost a round trip to find, so they are written down:
   `<textPath>`. Those become their own image layer, never baked into the plate. Cloning one
   out for rastering drops inherited opacity, so the effective alpha rides on the tint.
 
-## Credit
+## Provenance
 
-`protoflux.mjs` is copied verbatim from
-[dalekcoffee/resonite-knowledge-library](https://github.com/dalekcoffee/resonite-knowledge-library)
-(`protoflux/skill/scripts/`), where the format itself is documented. Keep it in sync there
-rather than editing this copy.
+`protoflux.mjs` is a reduced copy of a general-purpose Resonite encoder kept in a **private**
+repository, cut down to the parts dropcard calls — the graph-authoring and capture-and-replay
+helpers are not here. The package format itself is documented there rather than in this repo.
+Fixes made to this copy, such as the leading-`@` escaping, should be carried back upstream.

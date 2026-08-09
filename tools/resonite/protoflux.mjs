@@ -1,21 +1,20 @@
-// protoflux.mjs — reusable encoder for Resonite ProtoFlux → .resonitepackage.
+// protoflux.mjs — encoder for a Resonite scene graph → .resonitepackage.
 //
-// Generalized from the VR-confirmed "Pulse Beacon" encoder. You build a graph with
-// these primitives, then call exportPackage() — it serializes to FrDT/Brotli/BSON,
-// zips a .resonitepackage, AND self-validates (round-trip-safe types + 0 dangling refs).
+// Build a tree with these primitives, then call exportPackage(): it serialises to
+// FrDT/Brotli/BSON, zips a .resonitepackage, and self-validates (round-trip-safe types,
+// 0 dangling refs).
 //
 //   import { ProtoFlux } from './protoflux.mjs';
 //   const pf = ProtoFlux();
-//   const wt  = pf.node('WorldTimeFloat', T.WorldTime, {}, [-0.5, 0.2, 0]);
-//   const drv = pf.driveField({ valueType:'float3', sourceId: pack.id,
-//                               targetFieldId: cube.scaleFieldId, pos:[0.5,0,0] });
-//   const flux = pf.makeSlot('ProtoFlux', [], [0,0.6,0], [wt.slot, /*…*/, drv.slot]);
-//   const root = pf.makeSlot('My Gadget', [], [0,0,0], [cube.slot, flux], null, pf.rootId);
+//   const root = pf.makeSlot('My Gadget', [comp], [0,0,0], [child], null, pf.rootId);
 //   await pf.exportPackage({ name:'My Gadget', root, assets:[] });
 //
-// Deps (installed on demand wherever you export): bson, brotli-wasm, jszip.
-// Read references/node-catalog.md for node classpaths, field names, and the rules
-// this library encodes (strict BSON types, the addressing rule, the drive pair, etc.).
+// Deps: bson, brotli-wasm, jszip.
+//
+// PROVENANCE: a reduced copy of a general-purpose encoder kept in a private repository, cut
+// down to what dropcard actually calls. The graph-authoring helpers (node/driveField) and the
+// capture-and-replay helper (cloneNode) are gone along with their classpath constants. Fixes
+// made here — such as the leading-@ escaping below — should go back to the original.
 
 import { serialize, Int32, Long, Double } from 'bson';
 import { writeFile, mkdir } from 'node:fs/promises';
@@ -27,11 +26,6 @@ const require = createRequire(import.meta.url);
 const FRDT_HEADER = new Uint8Array([0x46, 0x72, 0x44, 0x54, 0x00, 0x00, 0x00, 0x00, 0x03]); // "FrDT"+nulls+Brotli
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NULL_GUID = '00000000-0000-0000-0000-000000000000';
-
-// Classpaths that follow the doubled-`FrooxEngine` / `[FrooxEngine]` quirks for the drive pair.
-// `<T>` is substituted. See node-catalog.md "drive a field".
-const VALUE_FIELD_DRIVE = (T) => `[ProtoFluxBindings]FrooxEngine.FrooxEngine.ProtoFlux.CoreNodes.ValueFieldDrive<${T}>`;
-const FIELD_DRIVE_PROXY = (T) => `[FrooxEngine]FrooxEngine.ProtoFlux.CoreNodes.FieldDriveBase<${T}>+Proxy`;
 
 export function ProtoFlux() {
   let _id = 0;
@@ -71,13 +65,6 @@ export function ProtoFlux() {
     return { comp: { Type: typeIndex(classpath), Data: data }, id };
   }
 
-  // A ProtoFlux node = one slot carrying one logic component. Returns {slot, id};
-  // `id` is the component ID = the node's data output (downstream fields reference it).
-  function node(name, classpath, fields = {}, pos = [0, 0, 0]) {
-    const { comp, id } = component(classpath, fields);
-    return { slot: makeSlot(name, [comp], pos), id };
-  }
-
   function makeSlot(name, components = [], pos = [0, 0, 0], children = [], tag = null, id = nextId()) {
     const position = fd(vec(pos[0], pos[1], pos[2]));
     const rotation = fd([D(0), D(0), D(0), D(1)]);
@@ -94,40 +81,6 @@ export function ProtoFlux() {
       ParentReference: null,                        // Resonite rebuilds parenting from nesting
       Children: children,
     };
-  }
-
-  // The drive pair: writes `sourceId`'s value into a scene field every frame.
-  // targetFieldId is the field the graph writes (e.g. a slot's Scale field ID, or any IField).
-  // Pass targetFieldId=null to emit an UNBOUND hook the user binds in-world.
-  function driveField({ valueType, sourceId, targetFieldId = null, name = 'ValueFieldDrive`1', pos = [0, 0, 0] }) {
-    const drive = component(VALUE_FIELD_DRIVE(valueType), { Value: sourceId });
-    const proxy = component(FIELD_DRIVE_PROXY(valueType), { Node: drive.id, Path: [], Drive: targetFieldId });
-    return { slot: makeSlot(name, [drive.comp, proxy.comp], pos), id: drive.id };
-  }
-
-  // ── capture→emit: clone verified components from a decoded fragment ──────────
-  // Deep-revive tagged JSON ({__f64}/{__i32}/{__i64}) → BSON types, remap every counter-GUID
-  // through a fresh map, and remap component Type indices from srcTypes into this registry.
-  function cloneNode(srcNode, srcTypes, map = new Map()) {
-    const revive = (n) => {
-      if (n === null) return null;
-      if (typeof n === 'string') {
-        if (n === NULL_GUID) return n;
-        if (GUID.test(n)) { let m = map.get(n); if (!m) { m = nextId(); map.set(n, m); } return m; }
-        return n;
-      }
-      if (typeof n !== 'object') return n;
-      if (Array.isArray(n)) return n.map(revive);
-      if ('__f64' in n) return new Double(n.__f64);
-      if ('__i32' in n) return new Int32(n.__i32);
-      if ('__i64' in n) return Long.fromNumber(n.__i64);
-      if (n.Type && typeof n.Type === 'object' && '__i32' in n.Type && n.Data) // component → remap Type by name
-        return { Type: typeIndex(srcTypes[n.Type.__i32]), Data: revive(n.Data) };
-      const out = {};
-      for (const [k, v] of Object.entries(n)) out[k] = revive(v);
-      return out;
-    };
-    return revive(srcNode);
   }
 
   // ── in-memory validation (mirrors find_dangling_refs.mjs) ────────────────────
@@ -228,6 +181,5 @@ export function ProtoFlux() {
   }
 
   return { nextId, id: nextId, rootId, typeIndex, D, vec, fd, fi, longField, list,
-           component, node, makeSlot, driveField, cloneNode, validate, exportPackage,
-           VALUE_FIELD_DRIVE, FIELD_DRIVE_PROXY };
+           component, makeSlot, validate, exportPackage };
 }
