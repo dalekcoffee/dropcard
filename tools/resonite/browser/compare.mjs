@@ -17,6 +17,12 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { PNG } = require('pngjs');
 
+/* The plate is what the exporter actually takes off the face, and it now matches Playwright to
+   well under a tenth of a percent — so the gate is set just above the antialiasing floor rather
+   than at some tolerant round number. Anything that trips it is a real regression, not noise.
+   (The whole-card figure stays higher and is only reported: it includes text, which the exporter
+   never rasterises — every string becomes a live TextRenderer in world.) */
+const GATE = 0.3;
 const JOBS = JSON.parse(readFileSync(new URL('../batch-layers.json', import.meta.url), 'utf8'));
 const RASTER = readFileSync(new URL('./raster.mjs', import.meta.url), 'utf8');
 
@@ -114,8 +120,8 @@ for (const [prefix, job] of Object.entries(JOBS)) {
   writeFileSync(new URL(`../cmp-${prefix}-browser.png`, import.meta.url), Buffer.from(png));
   writeFileSync(new URL(`../cmp-${prefix}-playwright.png`, import.meta.url), shot);
   console.log(`${prefix.padEnd(16)} plate ${platePct.toFixed(2)}%   (whole card ${pct.toFixed(2)}%)` +
-              (platePct > 2 ? '   <-- look at it' : ''));
+              (platePct > GATE ? '   <-- look at it' : ''));
 }
 await b.close();
-console.log(`\nworst ${worst.toFixed(2)}%`);
-process.exit(worst > 2 ? 1 : 0);
+console.log(`\nworst plate ${worst.toFixed(2)}%  (gate ${GATE}%)`);
+process.exit(worst > GATE ? 1 : 0);

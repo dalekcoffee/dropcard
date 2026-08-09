@@ -18,25 +18,46 @@ const INHERITED_ONLY = new Set(['cursor', 'pointer-events', 'user-select', '-web
 // the same tag are worth writing, which cuts it by roughly an order of magnitude.
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-function defaultsFor(tag, ns, cache, doc) {
+/* The probe MUST NOT live in the page.
+ *
+ * "Default" here has to mean the UA default, because the sealed SVG has no author stylesheet —
+ * only the inline styles written below. Probing in the live document instead measures the page's
+ * own CSS: a single `*{box-sizing:border-box}` rule makes border-box look like the default, so it
+ * is skipped as redundant, and every padded box in the clone silently reverts to content-box and
+ * grows by its padding. On a card that reads as the inner panel spilling over the frame.
+ *
+ * A blank same-origin iframe has a browsing context (so getComputedStyle works) and nothing but
+ * the UA stylesheet in it. `about:blank` is synchronously scriptable, so no load wait is needed.
+ */
+function makeProbe(doc) {
+  const f = doc.createElement('iframe');
+  f.setAttribute('aria-hidden', 'true');
+  f.style.cssText = 'position:fixed;left:-10000px;top:0;width:64px;height:64px;border:0;opacity:0;pointer-events:none';
+  doc.body.appendChild(f);
+  const d = f.contentDocument;
+  d.open(); d.write('<!doctype html><html><head></head><body></body></html>'); d.close();
+  return { frame: f, doc: d, win: f.contentWindow, cache: new Map() };
+}
+
+function defaultsFor(tag, ns, probe) {
   const key = `${ns}|${tag}`;
-  let d = cache.get(key);
+  let d = probe.cache.get(key);
   if (!d) {
     // An SVG element's defaults are nothing like an HTML element's — `fill`, `stroke` and
     // the geometry properties only exist in the SVG namespace, and createElement('path')
     // makes an HTMLUnknownElement whose computed style would filter out the wrong things.
-    let probe, host;
+    let el, host;
     if (ns === SVG_NS) {
-      host = doc.createElementNS(SVG_NS, 'svg');
-      probe = doc.createElementNS(SVG_NS, tag);
-      host.appendChild(probe); doc.body.appendChild(host);
+      host = probe.doc.createElementNS(SVG_NS, 'svg');
+      el = probe.doc.createElementNS(SVG_NS, tag);
+      host.appendChild(el); probe.doc.body.appendChild(host);
     } else {
-      probe = doc.createElement(tag); doc.body.appendChild(probe);
+      el = probe.doc.createElement(tag); probe.doc.body.appendChild(el);
     }
-    const cs = getComputedStyle(probe);
+    const cs = probe.win.getComputedStyle(el);
     d = {}; for (const p of cs) d[p] = cs.getPropertyValue(p);
-    (host ?? probe).remove();
-    cache.set(key, d);
+    (host ?? el).remove();
+    probe.cache.set(key, d);
   }
   return d;
 }
@@ -55,13 +76,13 @@ const styleText = (cs, def) => {
 // gone too — only @font-face survives into the clone. Icon fonts live entirely in those
 // pseudo-elements, so without this every glyph on the card silently vanishes: the avatar
 // placeholder, the social chips, the decorative marks. Each one becomes a real span.
-function addPseudos(src, dst, cache, doc) {
+function addPseudos(src, dst, doc, probe) {
   for (const which of ['::before', '::after']) {
     const cs = getComputedStyle(src, which);
     const raw = cs.content;
     if (!raw || raw === 'none' || raw === 'normal') continue;
     const span = doc.createElement('span');
-    span.setAttribute('style', styleText(cs, defaultsFor('span', null, cache, doc)) + ';content:normal;');
+    span.setAttribute('style', styleText(cs, defaultsFor('span', null, probe)) + ';content:normal;');
     // a computed `content` is a quoted string, possibly with \XXXX escapes for a glyph
     const str = /^["'](.*)["']$/s.exec(raw);
     if (str) span.textContent = str[1].replace(/\\([0-9a-fA-F]{1,6})\s?/g,
@@ -70,13 +91,13 @@ function addPseudos(src, dst, cache, doc) {
   }
 }
 
-function inlineStyles(src, dst, cache, doc) {
+function inlineStyles(src, dst, doc, probe) {
   const cs = getComputedStyle(src);
   if (dst.nodeType === 1 && dst.tagName)
-    dst.setAttribute('style', styleText(cs, defaultsFor(dst.tagName.toLowerCase(), src.namespaceURI, cache, doc)));
+    dst.setAttribute('style', styleText(cs, defaultsFor(dst.tagName.toLowerCase(), src.namespaceURI, probe)));
   const sk = src.children, dk = dst.children;
-  for (let i = 0; i < sk.length && i < dk.length; i++) inlineStyles(sk[i], dk[i], cache, doc);
-  if (dst.nodeType === 1) addPseudos(src, dst, cache, doc);   // after, so indices stay aligned
+  for (let i = 0; i < sk.length && i < dk.length; i++) inlineStyles(sk[i], dk[i], doc, probe);
+  if (dst.nodeType === 1) addPseudos(src, dst, doc, probe);   // after, so indices stay aligned
 }
 
 const asDataURI = async (url, mime) => {
@@ -117,8 +138,9 @@ async function inlineImages(root) {
 /**
  * @param el       the element to rasterise
  * @param scale    device pixels per CSS pixel (2 matches the Playwright capture)
- * @param hide     predicate: elements it returns true for are removed from the clone,
- *                 which is how the plate is captured without its text and graphics
+ * @param hide     predicate: elements it returns true for are made invisible in the clone,
+ *                 which is how the plate is captured without its text and graphics.
+ *                 They keep their boxes — see the note at the marking pass below.
  * @returns {Promise<Uint8Array>} PNG bytes with a transparent background
  */
 export async function rasterise(el, { scale = 2, hide = () => false } = {}) {
@@ -127,15 +149,30 @@ export async function rasterise(el, { scale = 2, hide = () => false } = {}) {
   const w = Math.round(rect.width), h = Math.round(rect.height);
 
   const clone = el.cloneNode(true);
-  // walk both trees together so the predicate sees the ORIGINAL nodes, which still have
-  // their ids, dataset and layout — a detached clone has no layout at all
-  (function prune(s, d) {
+  // Walk both trees together so the predicate sees the ORIGINAL nodes, which still have their
+  // ids, dataset and layout — a detached clone has no layout at all.
+  //
+  // Hidden means INVISIBLE, not absent. Removing a node reflows everything around it: drop the
+  // row of social chips off the bottom of a card and the panel above it stretches to take the
+  // space, so the plate comes back with its whole layout rearranged. `visibility:hidden` keeps
+  // the box and paints nothing, which is what the Node exporter does and therefore what the
+  // plate has to be. Marked here and applied after inlineStyles, which would otherwise
+  // overwrite the style attribute this sets.
+  (function mark(s, d) {
     const sk = [...s.children], dk = [...d.children];
     for (let i = 0; i < sk.length; i++) {
-      if (hide(sk[i])) dk[i].remove(); else prune(sk[i], dk[i]);
+      if (hide(sk[i])) dk[i].setAttribute('data-dc-hidden', '');
+      mark(sk[i], dk[i]);
     }
   })(el, clone);
-  inlineStyles(el, clone, new Map(), doc);
+  const probe = makeProbe(doc);
+  try { inlineStyles(el, clone, doc, probe); } finally { probe.frame.remove(); }
+  // Descendants keep no visibility of their own — a computed `visible` matches the tag default
+  // and so is never written out — which leaves them inheriting the hidden they sit under.
+  for (const n of clone.querySelectorAll('[data-dc-hidden]')) {
+    n.setAttribute('style', (n.getAttribute('style') || '') + ';visibility:hidden;');
+    n.removeAttribute('data-dc-hidden');
+  }
   await inlineImages(clone);
   const fontCss = await inlineFonts(doc);
 
