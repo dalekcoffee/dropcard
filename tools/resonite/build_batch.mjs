@@ -2,7 +2,7 @@
 // parameterised per card and sized from the LONG edge so portrait templates don't come
 // out oversized.
 import { ProtoFlux } from './protoflux.mjs';
-import { fetchTTF } from './fetchfont.mjs';
+import { fetchTTF, fetchWOFF2 } from './fetchfont.mjs';
 import { cardTheme, inkFor, renderOverlay } from './icon.mjs';
 import { Int32, Double } from 'bson';
 const D0 = n => new Double(n);
@@ -99,10 +99,17 @@ export function assertFacing(root, pf, label = 'object') {
   return true;
 }
 
+// DROPCARD_WOFF2=1 embeds woff2 instead of TrueType. A browser cannot fetch TrueType from
+// Google at all — it has no way to set a User-Agent — so if Resonite accepts woff2 the site
+// export can bundle real fonts, and packages shrink by a factor of fifteen or so into the
+// bargain. Whether it accepts them turns on a content sniffer that is not in the decompiled
+// set, so this exists to settle it with one import.
+const WOFF2 = process.env.DROPCARD_WOFF2 === '1';
 const ttfCache = new Map();   // family|weight -> bytes, shared across cards
 async function ttf(family, weight) {
   const k = `${family}|${weight}`;
-  if (!ttfCache.has(k)) ttfCache.set(k, Buffer.from((await fetchTTF(family, weight)).bytes));
+  if (!ttfCache.has(k))
+    ttfCache.set(k, Buffer.from((await (WOFF2 ? fetchWOFF2 : fetchTTF)(family, weight)).bytes));
   return ttfCache.get(k);
 }
 

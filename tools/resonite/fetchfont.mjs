@@ -14,6 +14,25 @@ const FALLBACK = [
 ];
 const substitute = (family) => (FALLBACK.find(([re]) => re.test(family)) || [, 'Lexend'])[1];
 
+// A browser cannot set User-Agent, so a page always gets woff2 — which is what the site
+// export will have to embed. FontX.Load lists woff2, but for a packdb:// URL with no suffix
+// Resonite sniffs the extension from content (Font.cs:262) using a library outside the
+// decompiled set, so whether it recognises 'wOF2' has to be settled by importing one.
+const MODERN_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                + 'Chrome/126.0.0.0 Safari/537.36';
+
+export async function fetchWOFF2(family, weight = 400) {
+  const q = `family=${encodeURIComponent(family).replace(/%20/g, '+')}:wght@${weight}`;
+  const css = await (await fetch(`https://fonts.googleapis.com/css2?${q}`,
+    { headers:{ 'User-Agent':MODERN_UA } })).text();
+  const m = /url\((https:[^)]+?\.woff2)\)/.exec(css);
+  if (!m) throw new Error(`no woff2 for ${family} ${weight}`);
+  const bytes = new Uint8Array(await (await fetch(m[1], { headers:{ 'User-Agent':MODERN_UA } })).arrayBuffer());
+  const magic = Buffer.from(bytes.slice(0, 4)).toString('hex');
+  if (magic !== '774f4632') throw new Error(`${family}: not woff2 (magic ${magic})`);   // 'wOF2'
+  return { bytes, magic, url:m[1], family, weight };
+}
+
 async function tryFetch(family, weight) {
   const q = `family=${encodeURIComponent(family).replace(/%20/g, '+')}:wght@${weight}`;
   const css = await (await fetch(`https://fonts.googleapis.com/css2?${q}`, { headers:{ 'User-Agent':UA } })).text();
