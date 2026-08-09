@@ -2,7 +2,7 @@
 // parameterised per card and sized from the LONG edge so portrait templates don't come
 // out oversized.
 import { ProtoFlux } from './protoflux.mjs';
-import { fetchTTF, fetchWOFF2 } from './fetchfont.mjs';
+import { fetchTTF, fetchWOFF2, fetchTTFFromRepo } from './fetchfont.mjs';
 import { cardTheme, inkFor, renderOverlay } from './icon.mjs';
 import { Int32, Double } from 'bson';
 const D0 = n => new Double(n);
@@ -99,17 +99,26 @@ export function assertFacing(root, pf, label = 'object') {
   return true;
 }
 
-// DROPCARD_WOFF2=1 embeds woff2 instead of TrueType. A browser cannot fetch TrueType from
-// Google at all — it has no way to set a User-Agent — so if Resonite accepts woff2 the site
-// export can bundle real fonts, and packages shrink by a factor of fifteen or so into the
-// bargain. Whether it accepts them turns on a content sniffer that is not in the decompiled
-// set, so this exists to settle it with one import.
-const WOFF2 = process.env.DROPCARD_WOFF2 === '1';
+// Where font bytes come from. DROPCARD_FONTS picks:
+//   cdn   (default) Google's CDN via a spoofed old-Android UA — a per-weight STATIC instance,
+//                   which is what the templates' bold headings need. Node only: a page cannot
+//                   set a User-Agent, so a browser is always served woff2.
+//   repo            the Google Fonts repository — real TrueType, `access-control-allow-origin:
+//                   *`, and a .ttf suffix, so it is the only source a BROWSER can use. Most
+//                   families are variable-only there, and StaticFont has no variation axis
+//                   (nor does anything else in the engine), so every weight of a family would
+//                   import at the variable font's default instance.
+//   woff2           settled, and the answer is no: Resonite loads the file and draws every
+//                   glyph as a NO GLYPH box, because for an extensionless packdb:// URL the
+//                   extension is sniffed from content (Font.cs:262) and the sniffer does not
+//                   know 'wOF2'. Kept so the finding stays reproducible.
+const FONT_SOURCE = process.env.DROPCARD_FONTS || 'cdn';
+const FETCH = { cdn: fetchTTF, repo: fetchTTFFromRepo, woff2: fetchWOFF2 }[FONT_SOURCE];
+if (!FETCH) throw new Error(`DROPCARD_FONTS must be cdn, repo or woff2 — got "${FONT_SOURCE}"`);
 const ttfCache = new Map();   // family|weight -> bytes, shared across cards
 async function ttf(family, weight) {
   const k = `${family}|${weight}`;
-  if (!ttfCache.has(k))
-    ttfCache.set(k, Buffer.from((await (WOFF2 ? fetchWOFF2 : fetchTTF)(family, weight)).bytes));
+  if (!ttfCache.has(k)) ttfCache.set(k, Buffer.from((await FETCH(family, weight)).bytes));
   return ttfCache.get(k);
 }
 

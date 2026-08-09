@@ -49,6 +49,52 @@ async function tryFetch(family, weight) {
   return { bytes, magic, url:m[1], family, weight };
 }
 
+// The route a BROWSER can use. css2 picks its format from the User-Agent, which a page
+// cannot set, so a tab is always served woff2 — and Resonite will not take woff2 from an
+// extensionless packdb:// URL: it loads the file and renders every glyph as a NO GLYPH box,
+// because the extension is sniffed from content (Font.cs:262) and the sniffer does not know
+// 'wOF2'. Tested in-world; that is not a guess.
+//
+// The Google Fonts REPOSITORY, though, holds the original TrueType, serves
+// `access-control-allow-origin: *`, and its URLs end in .ttf. Same bytes a browser can
+// actually reach, and an explicit extension so nothing has to be sniffed.
+const STYLE = { 100:'Thin', 200:'ExtraLight', 300:'Light', 400:'Regular', 500:'Medium',
+                600:'SemiBold', 700:'Bold', 800:'ExtraBold', 900:'Black' };
+const RAW = 'https://raw.githubusercontent.com/google/fonts/main';
+
+export async function fetchTTFFromRepo(family, weight = 400) {
+  const slug = family.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const camel = family.replace(/[^A-Za-z0-9]/g, '');
+  const style = STYLE[weight] ?? 'Regular';
+  // A static per-weight file first: a variable font would import at its default instance, so
+  // a 700 run would come out at 400. The variable file is the fallback, not the preference.
+  const candidates = [];
+  for (const lic of ['ofl', 'apache', 'ufl']) {
+    candidates.push(`${lic}/${slug}/static/${camel}-${style}.ttf`);
+    candidates.push(`${lic}/${slug}/${camel}-${style}.ttf`);
+    candidates.push(`${lic}/${slug}/${camel}%5Bwght%5D.ttf`);
+    candidates.push(`${lic}/${slug}/${camel}%5Bopsz,wght%5D.ttf`);
+  }
+  for (const path of candidates) {
+    try {
+      const r = await fetch(`${RAW}/${path}`);
+      if (!r.ok) continue;
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      const magic = [...bytes.slice(0, 4)].map(b => b.toString(16).padStart(2, '0')).join('');
+      if (magic !== '00010000' && magic !== '4f54544f') continue;
+      return { bytes, magic, url: `${RAW}/${path}`, family, weight,
+               variable: path.includes('%5B') };
+    } catch { /* try the next candidate */ }
+  }
+  const alt = substitute(family);
+  if (alt !== family) {
+    const viaAlt = await fetchTTFFromRepo(alt, weight).catch(() => null);
+    if (viaAlt) { console.log(`     ! ${family} ${weight} not in the fonts repo — substituted ${alt}`);
+                  return { ...viaAlt, substitutedFor: family }; }
+  }
+  throw new Error(`no TTF in the Google Fonts repo for ${family} ${weight}`);
+}
+
 export async function fetchTTF(family, weight = 400) {
   const direct = await tryFetch(family, weight).catch(() => null);
   if (direct) return direct;

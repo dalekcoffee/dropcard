@@ -79,11 +79,26 @@ accumulates down the card, and a background that does not paint on one template.
 yet — a card that renders subtly differently in the export than in the app is worse than one
 that fails.
 
-The other open question is font bytes. A browser cannot fetch TrueType from Google at all, so
-the site can only bundle **woff2**. `FontX.Load` lists it, but for a `packdb://` URL with no
-suffix the extension is sniffed from content (`Font.cs:262`) by a library outside the
-decompiled set. `DROPCARD_WOFF2=1` builds a package to settle it with one import. Worth having
-either way: woff2 is 5-7% the size of the same TrueType.
+### Fonts a browser can actually get
+
+`DROPCARD_FONTS` picks the source: `cdn` (default), `repo`, or `woff2`.
+
+**woff2 does not work — tested, not guessed.** `FontX.Load` lists it, so it looked fine on
+paper, but Resonite draws every glyph as a `NO GLYPH` box. For a `packdb://` URL with no
+suffix the extension is sniffed from content (`Font.cs:262`), and the sniffer does not know
+`wOF2`. That matters because css2 picks its format from the User-Agent and **a page cannot set
+one**, so woff2 is the only thing a browser gets from Google's CDN. The `woff2` setting is
+kept so the finding stays reproducible.
+
+The route that does work from a browser is the **Google Fonts repository**: real TrueType,
+`access-control-allow-origin: *`, and a `.ttf` suffix so nothing has to be sniffed. Every
+family the templates use resolves there.
+
+The catch is weight. Most of those families are now variable-only in the repo — there is no
+`static/` directory any more — and `StaticFont` has no variation axis, nor does anything else
+in the engine, so a variable file imports at its default instance and every weight of a family
+comes out the same. The `cdn` path avoids that by pulling a per-weight static instance, which
+is why it stays the default for the Node builders.
 
 ## Why it reads the DOM
 
