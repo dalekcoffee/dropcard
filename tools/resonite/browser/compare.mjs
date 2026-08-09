@@ -52,6 +52,35 @@ for (const [prefix, job] of Object.entries(JOBS)) {
     const el = document.getElementById('oshi-front-node');
     return [...await window.__dc_rasterise(el, { scale: 2 })];
   });
+
+  // The exporter never rasterises the whole card: text becomes live TextRenderers and each
+  // graphic gets its own layer, so the only raster it takes from the face is the PLATE, with
+  // both hidden. Measure that too — a text-layout drift that shows up in the full render may
+  // not touch the thing actually being exported.
+  const markHidden = () => {
+    const root = document.getElementById('oshi-front-node');
+    const walk = (e) => { for (const c of e.children) {
+      const own = [...c.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+      const r = c.getBoundingClientRect(), cs = getComputedStyle(c);
+      if (own && !c.closest('svg') && r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && +cs.opacity > 0)
+        c.dataset._dcHide = '1';
+      walk(c); } };
+    walk(root);
+    root.querySelectorAll('svg, img').forEach(e => {
+      if (e.tagName.toLowerCase() === 'svg' && e.parentElement.closest('svg')) return;
+      const r = e.getBoundingClientRect(); if (r.width >= 2 && r.height >= 2) e.dataset._dcHide = '1'; });
+  };
+  await p.evaluate(markHidden);
+  const platePng = await p.evaluate(async () => {
+    const el = document.getElementById('oshi-front-node');
+    return [...await window.__dc_rasterise(el, { scale: 2, hide: n => n.dataset._dcHide === '1' })];
+  });
+  await p.evaluate(() => { const root = document.getElementById('oshi-front-node');
+    root.querySelectorAll('*').forEach(e => { if (e.dataset._dcHide) { e.style.visibility = 'hidden'; } }); });
+  await p.waitForTimeout(300);
+  const plateShot = await p.locator('#oshi-front-node').screenshot({ omitBackground: true });
+  await p.evaluate(() => { document.getElementById('oshi-front-node').querySelectorAll('*')
+    .forEach(e => { if (e.dataset._dcHide) { e.style.visibility = ''; delete e.dataset._dcHide; } }); });
   await p.evaluate(() => { const el = document.getElementById('oshi-front-node');
     document.querySelectorAll('body *').forEach(e => {
       if (e.dataset._vis !== undefined) { e.style.visibility = e.dataset._vis; delete e.dataset._vis; } });
@@ -70,10 +99,22 @@ for (const [prefix, job] of Object.entries(JOBS)) {
     if (d > 24) diff++;
   }
   const pct = 100 * diff / (mine.width * mine.height);
-  worst = Math.max(worst, pct);
+
+  const pa = PNG.sync.read(Buffer.from(platePng)), pb = PNG.sync.read(plateShot);
+  let pdiff = 0;
+  for (let i = 0; i < pa.data.length; i += 4) {
+    const d = Math.abs(pa.data[i] - pb.data[i]) + Math.abs(pa.data[i+1] - pb.data[i+1])
+            + Math.abs(pa.data[i+2] - pb.data[i+2]) + Math.abs(pa.data[i+3] - pb.data[i+3]);
+    if (d > 24) pdiff++;
+  }
+  const platePct = 100 * pdiff / (pa.width * pa.height);
+  writeFileSync(new URL(`../cmp-${prefix}-plate-browser.png`, import.meta.url), Buffer.from(platePng));
+  writeFileSync(new URL(`../cmp-${prefix}-plate-playwright.png`, import.meta.url), plateShot);
+  worst = Math.max(worst, platePct);
   writeFileSync(new URL(`../cmp-${prefix}-browser.png`, import.meta.url), Buffer.from(png));
   writeFileSync(new URL(`../cmp-${prefix}-playwright.png`, import.meta.url), shot);
-  console.log(`${prefix.padEnd(16)} ${pct.toFixed(2)}% of pixels differ` + (pct > 2 ? '   <-- look at it' : ''));
+  console.log(`${prefix.padEnd(16)} plate ${platePct.toFixed(2)}%   (whole card ${pct.toFixed(2)}%)` +
+              (platePct > 2 ? '   <-- look at it' : ''));
 }
 await b.close();
 console.log(`\nworst ${worst.toFixed(2)}%`);
