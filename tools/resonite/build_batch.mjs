@@ -115,12 +115,23 @@ export function assertFacing(root, pf, label = 'object') {
 const FONT_SOURCE = process.env.DROPCARD_FONTS || 'cdn';
 const FETCH = { cdn: fetchTTF, repo: fetchTTFFromRepo, woff2: fetchWOFF2 }[FONT_SOURCE];
 if (!FETCH) throw new Error(`DROPCARD_FONTS must be cdn, repo or woff2 — got "${FONT_SOURCE}"`);
-const ttfCache = new Map();   // family|weight -> bytes, shared across cards
+const ttfCache = new Map();   // family|weight -> { bytes, variable }, shared across cards
 async function ttf(family, weight) {
   const k = `${family}|${weight}`;
-  if (!ttfCache.has(k)) ttfCache.set(k, Buffer.from((await FETCH(family, weight)).bytes));
+  if (!ttfCache.has(k)) { const f = await FETCH(family, weight);
+    ttfCache.set(k, { bytes: Buffer.from(f.bytes), variable: !!f.variable }); }
   return ttfCache.get(k);
 }
+
+// A variable font imports at its default instance, so Cormorant Garamond 400 and 700 are the
+// same file and the engine draws them identically — confirmed in-world, headings came out the
+// same weight as body copy. FaceDilate thickens MSDF glyphs at the material level and the
+// engine uses it for its own UI text (0.2-0.4), so it can stand in for the missing cut.
+// Only ever applied when the file cannot supply the weight itself; with a per-weight static
+// from the CDN this is zero and the real cut does the work.
+const DILATE_PER_100 = 0.05;
+const dilateFor = (weight, variable) =>
+  variable ? Math.max(0, (weight - 400)) / 100 * DILATE_PER_100 : 0;
 
 export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = null) {
   const faces = job.faces;
@@ -132,9 +143,10 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = nu
 
   const wanted = new Map();
   for (const s of Object.keys(faces)) for (const L of faces[s].layers) wanted.set(`${L.family}|${L.weight}`, L);
-  const fonts = new Map();
+  const fonts = new Map(), isVariable = new Map();
   for (const [k, L] of wanted) {
-    const bytes = await ttf(L.family, L.weight);
+    const { bytes, variable } = await ttf(L.family, L.weight);
+    isVariable.set(k, variable);
     const hash = createHash('sha256').update(bytes).digest('hex');
     const a = asset(CP.StaticFont, { URL:`@packdb:///${hash}`, Padding:new Int32(4),
       PixelRange:new Int32(4), GlyphEmSize:new Int32(64), MipMaps:true });
@@ -142,12 +154,21 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = nu
     if (!embeds.some(e => e.hash === hash)) embeds.push({ hash, bytes });
     fonts.set(k, a);
   }
-  const textMat = asset(CP.TextUnlit, {
-    TintColor:[D(1),D(1),D(1),D(1),'sRGB'], OutlineColor:[D(0),D(0),D(0),D(0),'sRGB'],
-    BackgroundColor:[D(0),D(0),D(0),D(0),'sRGB'], AutoBackgroundColor:false,
-    GlyphRenderMethod:'MSDF', PixelRange:D(4), FaceDilate:D(0), OutlineThickness:D(0),
-    FaceSoftness:D(0), BlendMode:'Alpha', Sidedness:'Double', ZWrite:'Auto', RenderQueue:new Int32(Q_TEXT) });
-  assets.push(textMat.entry);
+  // one material per distinct dilation, so a card with three weights costs three materials
+  const textMats = new Map();
+  const textMat = (dilate = 0) => {
+    const k = dilate.toFixed(3);
+    if (!textMats.has(k)) {
+      const m = asset(CP.TextUnlit, {
+        TintColor:[D(1),D(1),D(1),D(1),'sRGB'], OutlineColor:[D(0),D(0),D(0),D(0),'sRGB'],
+        BackgroundColor:[D(0),D(0),D(0),D(0),'sRGB'], AutoBackgroundColor:false,
+        GlyphRenderMethod:'MSDF', PixelRange:D(4), FaceDilate:D(dilate), OutlineThickness:D(0),
+        FaceSoftness:D(0), BlendMode:'Alpha', Sidedness:'Double', ZWrite:'Auto',
+        RenderQueue:new Int32(Q_TEXT) });
+      assets.push(m.entry); textMats.set(k, m);
+    }
+    return textMats.get(k);
+  };
 
   // ownFlip: does this quad supply its OWN 180-about-Y? See FACING below — everything under a
   // face must contribute exactly one, and the `px` wrapper already supplies it for its children.
@@ -177,7 +198,8 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = nu
       Text:L.text, ParseRichText:false, NullText:null, Size:D(L.fontPx*SIZE_GAIN),
       HorizontalAlign:ALIGN[L.align] ?? 'Left', VerticalAlign:'Middle', AlignmentMode:'Geometric',
       Color:[D(L.rgba[0]),D(L.rgba[1]),D(L.rgba[2]),D(L.rgba[3]),'sRGB'],
-      Materials:pf.list([textMat.id]), LineHeight:D((L.lineHeight/L.fontPx)*LH_BASIS),
+      Materials:pf.list([textMat(dilateFor(L.weight, isVariable.get(`${L.family}|${L.weight}`))).id]),
+      LineHeight:D((L.lineHeight/L.fontPx)*LH_BASIS),
       Bounded:true, BoundsSize:[D(L.w),D(L.h)], BoundsAlignment:'MiddleCenter',
       MaskPattern:null, HorizontalAutoSize:false, VerticalAutoSize:false,
       Font:fonts.get(`${L.family}|${L.weight}`).id }).comp],
@@ -389,7 +411,8 @@ export async function cardRoot(pf, asset, assets, embeds, prefix, job, page = nu
   if (noPic.length)
     console.log(`     ! no profile picture on the ${noPic.join(' and ')} — the add-contact ` +
                 `target is the empty placeholder frame. Import or upload an avatar for a real one.`);
-  return { root, CARD_W, CARD_H, S, fonts, noPic, touchReport, userIdFields };
+  return { root, CARD_W, CARD_H, S, fonts, noPic, touchReport, userIdFields,
+         dilations: [...textMats.keys()].map(Number).sort((a,b)=>a-b) };
 }
 
 export { TV, CP, LONG_EDGE, CARD_GAP, COLLIDER_T };
@@ -417,7 +440,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const r = await pf.exportPackage({ name:`dropcard ${job.template} (${job.content})`, root:c.root,
       assets, embeddedAssets:embeds, outPath:`out/dropcard_${prefix}.resonitepackage`, typeVersions:TV });
     console.log(`   ${job.template} ${(c.CARD_W*1000).toFixed(0)}×${(c.CARD_H*1000).toFixed(0)}mm  ` +
-                `fonts=${c.fonts.size} embeds=${embeds.length} ${r.ok?'ok':'DANGLING'}`);
+                `fonts=${c.fonts.size} embeds=${embeds.length} ${r.ok?'ok':'DANGLING'}` +
+                (c.dilations.some(d => d > 0) ? `  synthetic weight: dilate ${c.dilations.join('/')}` : ''));
     for (const t of c.touchReport)
       console.log(`     contact ${t.side.padEnd(5)} ${t.what.padEnd(20)} ` +
                   `${t.w.toFixed(0)}×${t.h.toFixed(0)}px at ${t.x.toFixed(0)},${t.y.toFixed(0)}`);

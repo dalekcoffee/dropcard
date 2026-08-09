@@ -96,9 +96,19 @@ family the templates use resolves there.
 
 The catch is weight. Most of those families are now variable-only in the repo — there is no
 `static/` directory any more — and `StaticFont` has no variation axis, nor does anything else
-in the engine, so a variable file imports at its default instance and every weight of a family
-comes out the same. The `cdn` path avoids that by pulling a per-weight static instance, which
-is why it stays the default for the Node builders.
+in the engine. Confirmed in-world: an Editorial card whose name and labels are weight 700 and
+whose body is 400 rendered all three identically, because the file is the same and it imports
+at its default instance.
+
+**`FaceDilate` fills the gap.** It thickens MSDF glyphs at the material level, and the engine
+uses it for its own UI text at 0.2-0.4, so a synthetic weight can stand in for the missing
+cut: one material per distinct dilation, `(weight - 400) / 100 * 0.05`. Editorial's three
+weights become dilations 0 / 0.1 / 0.15. It is applied **only when the file cannot supply the
+weight itself** — with a per-weight static from the CDN it stays at zero and the real cut does
+the work, so the two sources never double up.
+
+The `cdn` path still gives truer letterforms, which is why it remains the default for the Node
+builders; `repo` is what the site will have to use.
 
 ## Why it reads the DOM
 
