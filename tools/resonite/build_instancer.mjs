@@ -9,7 +9,8 @@ import { createHash } from 'node:crypto';
 import { Int32 } from 'bson';
 import pkg from '/opt/node22/lib/node_modules/playwright/index.js'; const { chromium } = pkg;
 import { cardRoot, newEncoder, assertFacing, TV, CP as CARD_CP } from './build_batch.mjs';
-import { cardTheme, inkFor, resolveIcon, renderButtonFace, BACKINGS } from './icon.mjs';
+import { cardTheme, resolveIcon, renderButtonFace, BACKINGS } from './icon.mjs';
+import { inkFor } from './colour.mjs';
 
 const FE = '[FrooxEngine]FrooxEngine.';
 const PB = '[ProtoFluxBindings]FrooxEngine.ProtoFlux.Runtimes.Execution.Nodes.';

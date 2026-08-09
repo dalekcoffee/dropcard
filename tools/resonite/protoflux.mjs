@@ -38,6 +38,7 @@ export function ProtoFlux() {
 
   // ── value helpers ──────────────────────────────────────────────────────────
   const D = (n) => new Double(n);
+  const i32 = (n) => new Int32(n);                  // a bare Int32 VALUE, for use inside fd()
   const vec = (...xs) => xs.map(D);                 // float2/3/4/Q/colorX components (append a profile string yourself for colorX)
   // A leading '@' marks a URL in the data tree: DataTreeValue.IsURL is true for any string
   // starting with a single '@', and Extract<string> THROWS on one ("is an URL, not a raw
@@ -180,6 +181,6 @@ export function ProtoFlux() {
     return { path: out, mainHash, ids: _id, ...report, ok };
   }
 
-  return { nextId, id: nextId, rootId, typeIndex, D, vec, fd, fi, longField, list,
+  return { nextId, id: nextId, rootId, typeIndex, D, i32, vec, fd, fi, longField, list,
            component, makeSlot, validate, exportPackage };
 }
