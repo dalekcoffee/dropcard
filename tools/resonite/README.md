@@ -45,11 +45,45 @@ feeds the decoded tree straight back through `pack.mjs`, and decodes that again.
 trees mean the hand-written writers read back the way the engine's own libraries expect. It
 runs in Node only because that is where the reference libraries live.
 
-Still to do before the site can export: rasterising the card without Playwright (the plates
-and graphics are screenshots of DOM subtrees today), and getting font bytes Resonite will
-accept — `FontX.Load` lists `woff2`, which is the format a browser can actually fetch from
-gstatic, but the extension is sniffed from content for a `packdb://` URL with no suffix
-(`Font.cs:262`) and that sniffer is a third-party library, so it needs testing in-world.
+`browser/raster.mjs` is the other half — rasterising a DOM subtree in the page, since there is
+no `element.screenshot()` outside Playwright. It clones the subtree into an SVG
+`<foreignObject>` and draws that to a canvas. **An SVG loaded as an image is sealed**: no
+network, no access to the document's stylesheets, and cross-origin content taints the canvas.
+So everything has to be inlined first — computed styles onto the elements, fonts and images as
+data URIs.
+
+None of that fails loudly. A missed resource just renders differently, so `browser/compare.mjs`
+renders every template BOTH ways in one session and diffs them pixel by pixel:
+
+```sh
+npx http-server -p 8899 -s ../..
+node browser/compare.mjs
+```
+
+Three faults it has already caught, none of which threw an error:
+
+- **`position: static` on the clone root.** Neutralising the page position that way hands every
+  absolutely-positioned descendant a different containing block, and the decorative panels fly
+  off the card. `relative` neutralises it without changing what children resolve against.
+- **SVG defaults probed as HTML.** `createElement('path')` is an `HTMLUnknownElement`; its
+  computed style has nothing to do with an SVG `path`, so the "differs from default" filter
+  drops the wrong properties.
+- **Pseudo-elements.** `cloneNode` does not carry `::before`/`::after`, and the rules that
+  would recreate them are gone — only `@font-face` survives into the clone. Icon fonts live
+  entirely in those pseudo-elements, so every glyph on the card vanished: avatar placeholder,
+  social chips, decorative marks. Fixing this took Editorial from 24% of pixels differing to
+  1.7%.
+
+Where it stands: worst case 9%, best 1.7%. What remains is a small vertical layout drift that
+accumulates down the card, and a background that does not paint on one template. Not shippable
+yet — a card that renders subtly differently in the export than in the app is worse than one
+that fails.
+
+The other open question is font bytes. A browser cannot fetch TrueType from Google at all, so
+the site can only bundle **woff2**. `FontX.Load` lists it, but for a `packdb://` URL with no
+suffix the extension is sniffed from content (`Font.cs:262`) by a library outside the
+decompiled set. `DROPCARD_WOFF2=1` builds a package to settle it with one import. Worth having
+either way: woff2 is 5-7% the size of the same TrueType.
 
 ## Why it reads the DOM
 

@@ -6,3 +6,4 @@ out/
 *_decoded.json
 package-lock.json
 *_browser.resonitepackage
+cmp-*.png
