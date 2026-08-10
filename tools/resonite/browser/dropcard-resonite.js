@@ -209,6 +209,7 @@ const sha256 = async (bytes) => {
 
 // ── the package ─────────────────────────────────────────────────────────────
 const FRDT = new Uint8Array([0x46, 0x72, 0x44, 0x54, 0, 0, 0, 0, 0x03]);   // "FrDT" + Brotli
+const OWNER = 'U-dropcard';
 
 async function buildPackage({ name, types, typeVersions = {}, object, assets = [],
                                      embeddedAssets = [], version = '2026.6.2.275' }) {
@@ -230,7 +231,11 @@ async function buildPackage({ name, types, typeVersions = {}, object, assets = [
     if (got !== a.hash) throw new Error(`embedded asset hash mismatch for ${a.hash.slice(0, 12)}`);
   }
   const now = '2026-06-03T00:00:00.0000000Z';
-  const record = { id: 'R-Main', ownerId: 'U-JustDalek-', assetUri: `packdb:///${mainHash}`,
+  /* A neutral owner. The record needs a well-formed id and Resonite reassigns ownership on
+     import, so this is metadata rather than anything functional — but it travels inside every
+     file the site hands out, and one person's user id has no business being in everyone
+     else's export. */
+  const record = { id: 'R-Main', ownerId: OWNER, assetUri: `packdb:///${mainHash}`,
     version: { globalVersion: 0, localVersion: 0, lastModifyingUserId: null, lastModifyingMachineId: null },
     name, description: null, recordType: 'object', ownerName: null, tags: null, path: null,
     thumbnailUri: null, lastModificationTime: now, creationTime: now, firstPublishTime: null,
@@ -1408,6 +1413,35 @@ async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, font
 
 
 
+/* Is this family actually resolving, or is the browser quietly substituting?
+ *
+ * NOT document.fonts.check — that answers true for a family it has never heard of, on the
+ * grounds that an unknown name is a system font it should assume exists. Measuring is the
+ * reliable way: set the text in `"Family", <generic>` and compare against the generic alone.
+ * If a real face is resolving, the widths differ for at least one generic. */
+const familyAvailable = (() => {
+  const GENERICS = ['monospace', 'serif', 'sans-serif'];
+  const SAMPLE = 'MWmwiI0Oo@—llB';    // wide and narrow glyphs, so a substitution shows up
+  let ctx = null, base = null, cache = new Map();
+  return (family) => {
+    if (cache.has(family)) return cache.get(family);
+    try {
+      if (!ctx) {
+        ctx = document.createElement('canvas').getContext('2d');
+        base = {};
+        for (const g of GENERICS) { ctx.font = `72px ${g}`; base[g] = ctx.measureText(SAMPLE).width; }
+      }
+      let real = false;
+      for (const g of GENERICS) {
+        ctx.font = `72px "${family}", ${g}`;
+        if (Math.abs(ctx.measureText(SAMPLE).width - base[g]) > 0.5) { real = true; break; }
+      }
+      cache.set(family, real);
+      return real;
+    } catch { return true; }          // can't tell — say nothing rather than warn wrongly
+  };
+})();
+
 const safeName = (s) => (String(s || '').trim().replace(/[^A-Za-z0-9._-]+/g, '-')
   .replace(/^-+|-+$/g, '') || 'dropcard');
 
@@ -1433,6 +1467,21 @@ async function exportResonite({ fields = {}, template = 'Card', bake = false,
   if (!bake) onProgress('fonts', 'fetching the typefaces');
   const fontFor = fontLoader(log);
   const job = { template, faces, fields };
+
+  /* Google Fonts are off until the user turns them on, so most previews are drawn in a system
+     fallback while the template still NAMES its intended family. The export embeds that family
+     — it is the only one we can fetch, and it is what the template was designed in — which
+     means the card in world can legitimately look better than the card on screen. Worth saying
+     out loud rather than leaving as a surprise. */
+  if (!bake) {
+    const missing = [...new Set(Object.values(faces).flatMap(f => (f.layers || []).map(L => L.family)))]
+      .filter(fam => fam && !/^(system-ui|sans-serif|serif|monospace|ui-|-apple)/i.test(fam))
+      .filter(fam => !familyAvailable(fam));
+    if (missing.length)
+      log(`Your preview is using a system face, but the card will be built in ` +
+          `${missing.slice(0, 3).join(', ')}. Turn on Google Fonts under Style to see it as it ` +
+          `will look.`);
+  }
 
   let theme = null, overlayFor = null;
   if (withOverlay) {
@@ -1578,9 +1627,14 @@ async function downloadWithStatus(opts = {}) {
     const bits = [`${report.widthMM}×${report.heightMM}mm`];
     if (!report.baked) bits.push(`${report.fonts} font${report.fonts === 1 ? '' : 's'}`);
     bits.push(`${(report.bytes / 1e6).toFixed(1)} MB`);
-    const note = report.noPicture?.length
-      ? 'No profile picture, so add-contact points at the empty frame.' : '';
-    show('ok', `Saved ${filename}`, `${bits.join(' · ')}. Drag it into Resonite.${note ? ' ' + note : ''}`, 9000);
+    // Whatever the build had to say — a substituted family, a missing photo, a preview drawn in
+    // a different face. These are the things someone would otherwise only notice in world.
+    const notes = (report.notes || [])
+      .map(s => s.replace(/^!\s*/, ''))
+      .map(s => s.charAt(0).toUpperCase() + s.slice(1));   // the builder's notes start bare
+    show('ok', `Saved ${filename}`,
+         [`${bits.join(' · ')}. Drag it into Resonite.`, ...notes.slice(0, 2)].join(' '),
+         notes.length ? 14000 : 9000);
     return report;
   } catch (e) {
     console.error('[dropcard] Resonite export failed', e);

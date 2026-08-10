@@ -102,9 +102,14 @@ export async function downloadWithStatus(opts = {}) {
     const bits = [`${report.widthMM}×${report.heightMM}mm`];
     if (!report.baked) bits.push(`${report.fonts} font${report.fonts === 1 ? '' : 's'}`);
     bits.push(`${(report.bytes / 1e6).toFixed(1)} MB`);
-    const note = report.noPicture?.length
-      ? 'No profile picture, so add-contact points at the empty frame.' : '';
-    show('ok', `Saved ${filename}`, `${bits.join(' · ')}. Drag it into Resonite.${note ? ' ' + note : ''}`, 9000);
+    // Whatever the build had to say — a substituted family, a missing photo, a preview drawn in
+    // a different face. These are the things someone would otherwise only notice in world.
+    const notes = (report.notes || [])
+      .map(s => s.replace(/^!\s*/, ''))
+      .map(s => s.charAt(0).toUpperCase() + s.slice(1));   // the builder's notes start bare
+    show('ok', `Saved ${filename}`,
+         [`${bits.join(' · ')}. Drag it into Resonite.`, ...notes.slice(0, 2)].join(' '),
+         notes.length ? 14000 : 9000);
     return report;
   } catch (e) {
     console.error('[dropcard] Resonite export failed', e);

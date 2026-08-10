@@ -14,6 +14,35 @@ import { newEncoder } from './encoder.mjs';
 import { sha256 } from './pack.mjs';
 import { cardRoot, TV } from '../scene.mjs';
 
+/* Is this family actually resolving, or is the browser quietly substituting?
+ *
+ * NOT document.fonts.check — that answers true for a family it has never heard of, on the
+ * grounds that an unknown name is a system font it should assume exists. Measuring is the
+ * reliable way: set the text in `"Family", <generic>` and compare against the generic alone.
+ * If a real face is resolving, the widths differ for at least one generic. */
+const familyAvailable = (() => {
+  const GENERICS = ['monospace', 'serif', 'sans-serif'];
+  const SAMPLE = 'MWmwiI0Oo@—llB';    // wide and narrow glyphs, so a substitution shows up
+  let ctx = null, base = null, cache = new Map();
+  return (family) => {
+    if (cache.has(family)) return cache.get(family);
+    try {
+      if (!ctx) {
+        ctx = document.createElement('canvas').getContext('2d');
+        base = {};
+        for (const g of GENERICS) { ctx.font = `72px ${g}`; base[g] = ctx.measureText(SAMPLE).width; }
+      }
+      let real = false;
+      for (const g of GENERICS) {
+        ctx.font = `72px "${family}", ${g}`;
+        if (Math.abs(ctx.measureText(SAMPLE).width - base[g]) > 0.5) { real = true; break; }
+      }
+      cache.set(family, real);
+      return real;
+    } catch { return true; }          // can't tell — say nothing rather than warn wrongly
+  };
+})();
+
 const safeName = (s) => (String(s || '').trim().replace(/[^A-Za-z0-9._-]+/g, '-')
   .replace(/^-+|-+$/g, '') || 'dropcard');
 
@@ -39,6 +68,21 @@ export async function exportResonite({ fields = {}, template = 'Card', bake = fa
   if (!bake) onProgress('fonts', 'fetching the typefaces');
   const fontFor = fontLoader(log);
   const job = { template, faces, fields };
+
+  /* Google Fonts are off until the user turns them on, so most previews are drawn in a system
+     fallback while the template still NAMES its intended family. The export embeds that family
+     — it is the only one we can fetch, and it is what the template was designed in — which
+     means the card in world can legitimately look better than the card on screen. Worth saying
+     out loud rather than leaving as a surprise. */
+  if (!bake) {
+    const missing = [...new Set(Object.values(faces).flatMap(f => (f.layers || []).map(L => L.family)))]
+      .filter(fam => fam && !/^(system-ui|sans-serif|serif|monospace|ui-|-apple)/i.test(fam))
+      .filter(fam => !familyAvailable(fam));
+    if (missing.length)
+      log(`Your preview is using a system face, but the card will be built in ` +
+          `${missing.slice(0, 3).join(', ')}. Turn on Google Fonts under Style to see it as it ` +
+          `will look.`);
+  }
 
   let theme = null, overlayFor = null;
   if (withOverlay) {

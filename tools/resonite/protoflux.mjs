@@ -152,7 +152,10 @@ export function ProtoFlux() {
     const assetManifest = embeddedAssets.map((a) => ({ hash: a.hash, bytes: a.bytes.length }));
 
     const now = '2026-06-03T00:00:00.0000000Z';
-    const record = { id: 'R-Main', ownerId: 'U-JustDalek-', assetUri: `packdb:///${mainHash}`,
+    // A neutral owner: the record needs a well-formed id and Resonite reassigns ownership on
+    // import, so this is metadata — but it travels inside every file handed out, and one
+    // person's user id has no business being in everyone else's export.
+    const record = { id: 'R-Main', ownerId: 'U-dropcard', assetUri: `packdb:///${mainHash}`,
       version: { globalVersion: 0, localVersion: 0, lastModifyingUserId: null, lastModifyingMachineId: null },
       name, description: null, recordType: 'object', ownerName: null, tags: null, path: null, thumbnailUri: null,
       lastModificationTime: now, creationTime: now, firstPublishTime: null, isDeleted: false, isPublic: false,

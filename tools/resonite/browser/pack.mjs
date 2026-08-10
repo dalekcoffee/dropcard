@@ -168,6 +168,7 @@ export const sha256 = async (bytes) => {
 
 // ── the package ─────────────────────────────────────────────────────────────
 const FRDT = new Uint8Array([0x46, 0x72, 0x44, 0x54, 0, 0, 0, 0, 0x03]);   // "FrDT" + Brotli
+const OWNER = 'U-dropcard';
 
 export async function buildPackage({ name, types, typeVersions = {}, object, assets = [],
                                      embeddedAssets = [], version = '2026.6.2.275' }) {
@@ -189,7 +190,11 @@ export async function buildPackage({ name, types, typeVersions = {}, object, ass
     if (got !== a.hash) throw new Error(`embedded asset hash mismatch for ${a.hash.slice(0, 12)}`);
   }
   const now = '2026-06-03T00:00:00.0000000Z';
-  const record = { id: 'R-Main', ownerId: 'U-JustDalek-', assetUri: `packdb:///${mainHash}`,
+  /* A neutral owner. The record needs a well-formed id and Resonite reassigns ownership on
+     import, so this is metadata rather than anything functional — but it travels inside every
+     file the site hands out, and one person's user id has no business being in everyone
+     else's export. */
+  const record = { id: 'R-Main', ownerId: OWNER, assetUri: `packdb:///${mainHash}`,
     version: { globalVersion: 0, localVersion: 0, lastModifyingUserId: null, lastModifyingMachineId: null },
     name, description: null, recordType: 'object', ownerName: null, tags: null, path: null,
     thumbnailUri: null, lastModificationTime: now, creationTime: now, firstPublishTime: null,
