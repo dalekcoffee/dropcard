@@ -12,7 +12,14 @@ import { fontLoader } from './fonts.mjs';
 import { cardTheme, renderOverlay } from './overlay.mjs';
 import { newEncoder } from './encoder.mjs';
 import { sha256 } from './pack.mjs';
-import { cardRoot, TV } from '../scene.mjs';
+import { cardRoot, TV, CP } from '../scene.mjs';
+import { dispenserRoot } from '../instancer.mjs';
+import { renderButtonFace, BACKINGS } from './button.mjs';
+import { inkFor } from '../colour.mjs';
+
+const hexToRGB = (h) => { const s = String(h || '').replace('#', '');
+  const n = s.length === 3 ? [...s].map(c => c + c) : (s.match(/../g) || ['77', '55', 'cc']);
+  return n.slice(0, 3).map(v => parseInt(v, 16)); };
 
 const safeName = (s) => (String(s || '').trim().replace(/[^A-Za-z0-9._-]+/g, '-')
   .replace(/^-+|-+$/g, '') || 'dropcard');
@@ -28,7 +35,10 @@ const safeName = (s) => (String(s || '').trim().replace(/[^A-Za-z0-9._-]+/g, '-'
  *                    it as editable elements. Needs no typefaces, so it makes no requests.
  */
 export async function exportResonite({ fields = {}, template = 'Card', bake = false,
-                                       onProgress = () => {}, withOverlay = true } = {}) {
+                                       dispenser = false, backing = 'rounded', backingColour = null,
+                                       icon = 'auto', onProgress = () => {}, withOverlay = true } = {}) {
+  if (dispenser && !BACKINGS[backing])
+    throw new Error(`unknown backing "${backing}" — one of ${Object.keys(BACKINGS).join(', ')}`);
   const notes = [];
   const log = (m) => { notes.push(String(m).trim()); onProgress('note', String(m).trim()); };
 
@@ -89,20 +99,41 @@ export async function exportResonite({ fields = {}, template = 'Card', bake = fa
   const { pf, asset, assets, embeds } = newEncoder();
   const card = await cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, fontFor,
                                 theme, overlayFor, userId: '', bake, log });
-  card.root.ID = pf.rootId;
+  /* The dispenser wraps the very same card. Its template ships with UserId EMPTY and the
+     graph fills it in once, from whoever is HOLDING the dispenser — never from whoever presses
+     it, so a stranger pressing your dispenser gets your card rather than becoming its owner.
+     That is why a card exported on its own opens a blank contact: nothing has told it whose
+     card it is, and only the dispenser can answer that. */
+  let name = `dropcard — ${template}`;
+  let root = card.root;
+  if (dispenser) {
+    onProgress('build', 'building the dispenser');
+    const backingColor = (!backing || backing === 'none') ? theme?.accent
+      : (backingColour || theme?.accent || '#7755cc');
+    const ink = inkFor(backing === 'none' ? (theme?.surfaceRGB || [255, 255, 255])
+                                          : hexToRGB(backingColor),
+                       theme || { surfaceRGB: [255, 255, 255] });
+    const face = await renderButtonFace({ icon, job, ink, backing, backingColor });
+    const faceHash = await sha256(face.png);
+    root = dispenserRoot({ pf, asset, assets, embeds, CP, card, buttonPng: face.png,
+                           hashOf: (b) => { if (b !== face.png) throw new Error('unexpected raster'); return faceHash; } }).root;
+    name = `dropcard dispenser — ${template}`;
+  } else {
+    card.root.ID = pf.rootId;
+  }
 
   onProgress('encode', 'writing the package');
-  const result = await pf.exportPackage({ name: `dropcard — ${template}`, root: card.root,
-    assets, embeddedAssets: embeds, typeVersions: TV });
+  const result = await pf.exportPackage({ name, root, assets, embeddedAssets: embeds, typeVersions: TV });
 
   const base = safeName(fields.Nickname || fields.Name || 'dropcard');
   return {
     blob: new Blob([result.bytes], { type: 'application/octet-stream' }),
-    filename: `${base}-${safeName(template).toLowerCase()}${bake ? '-baked' : ''}.resonitepackage`,
+    filename: `${base}-${safeName(template).toLowerCase()}` +
+              `${dispenser ? '-dispenser' : ''}${bake ? '-baked' : ''}.resonitepackage`,
     report: {
       widthMM: +(card.CARD_W * 1000).toFixed(1), heightMM: +(card.CARD_H * 1000).toFixed(1),
       fonts: card.fonts.size, embedded: embeds.length, bytes: result.bytes.length,
-      contacts: card.touchReport.length, noPicture: card.noPic, notes, baked: bake,
+      contacts: card.touchReport.length, noPicture: card.noPic, notes, baked: bake, dispenser,
     },
   };
 }
