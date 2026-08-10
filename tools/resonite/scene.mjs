@@ -253,12 +253,23 @@ export async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha25
       return (b.w > 8 && b.h > 8) ? b : null;
     };
 
+    /* Match the name loosely, because the two sides are never spelled the same.
+       The FIELD still holds what was typed — "Dalek :coffee: :nkocat:" — while the captured RUN
+       holds what was drawn, with every custom shortcode already turned into an <img> and gone
+       from the text. Comparing them literally meant a name with any server emoji in it never
+       matched, so those cards got no add-contact on the name at all: it worked on the photo and
+       on the back, and did nothing on the front. Strip shortcodes and emoji from both, then
+       compare what is left. */
+    const plain = (s) => String(s || '')
+      .replace(/:[\w+-]+:/g, ' ')                        // custom emoji, written as shortcodes
+      .replace(/\p{Extended_Pictographic}|\uFE0F|\u200D/gu, ' ')   // unicode emoji and joiners
+      .replace(/\s+/g, ' ').trim().toLowerCase();
     const names = [job.fields?.Name, job.fields?.Nickname]
-      .filter(Boolean).map(v => v.trim().toLowerCase());
+      .filter(Boolean).map(plain).filter(Boolean);
     const texts = (f.layers || []).map(glyphBox);
     if (names.length) {
       (f.layers || []).forEach((L, i) => {
-        if (!names.includes(L.text.trim().toLowerCase())) return;
+        if (!names.includes(plain(L.text))) return;
         const near = [...texts.filter((_, j) => j !== i), ...(f.links || []), ...out];
         const b = fit(glyphBox(L), near);
         if (b) out.push({ ...b, what:'name' });

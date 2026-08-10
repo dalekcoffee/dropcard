@@ -91,9 +91,17 @@ export async function captureFace(root, { scale = 2, bake = false, missed = null
                x: r.x - R.x, y: r.y - R.y, w: r.width, h: r.height }; })
     .filter(l => /^https?:\/\//i.test(l.url));
 
+  /* A run drawn as a picture already contains its own images. Capturing those separately as
+     well would draw each one twice — once inside the run's raster and once as its own quad,
+     landing a pixel or two apart. On a name like "Dalek ☕:nkocat:" that showed as a second cat
+     sitting below the signature line. */
+  const inRaster = textEls.filter((_, i) => layers[i].asGraphic);
+  const isInsideRaster = (e) => inRaster.some(t => t !== e && t.contains(e));
+
   const gfx = [];
   root.querySelectorAll('svg, img').forEach(e => {
     if (e.tagName.toLowerCase() === 'svg' && e.parentElement.closest('svg')) return;
+    if (isInsideRaster(e)) return;
     const r = e.getBoundingClientRect();
     if (r.width < 2 || r.height < 2) return;
     let alpha = 1;
