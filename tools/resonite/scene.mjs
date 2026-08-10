@@ -136,7 +136,10 @@ export async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha25
   const D = pf.D;
 
   const wanted = new Map();
-  if (!bake) for (const s of Object.keys(faces)) for (const L of faces[s].layers) wanted.set(`${L.family}|${L.weight}`, L);
+  // asGraphic runs are drawn from a raster, so they need no typeface of their own
+  const drawnAsText = L => !L.asGraphic;
+  if (!bake) for (const s of Object.keys(faces)) for (const L of faces[s].layers.filter(drawnAsText))
+    wanted.set(`${L.family}|${L.weight}`, L);
   const fonts = new Map(), isVariable = new Map();
   for (const [k, L] of wanted) {
     const { bytes, variable } = await fontFor(L.family, L.weight);
@@ -400,7 +403,10 @@ export async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha25
         { w:CARD_W, h:CARD_H, queue:Q_PLATE, ownFlip:ON_THE_FACE }), [0,0,0]) ];
     // baked: the plate already carries both, so rebuilding them would double them up
     if (!bake && f.gfx?.length)   kids.push(px('Graphics', f.gfx.map(gfxSlot(side))));
-    if (!bake && f.layers.length) kids.push(px('Text', f.layers.map(textSlot)));
+    // a run with emoji in it is in f.gfx instead — no text font has the glyphs, and Resonite
+    // has no fallback, so a TextRenderer would draw NO GLYPH boxes
+    const asText = f.layers.filter(drawnAsText);
+    if (!bake && asText.length) kids.push(px('Text', asText.map(textSlot)));
     if (f.links?.length) kids.push(px('Links', f.links.map(linkSlot)));
     const ct = contacts[side];
     if (ct.length) { touchReport.push(...ct.map(t => ({ side, ...t })));

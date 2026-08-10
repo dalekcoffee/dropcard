@@ -101,17 +101,23 @@ for (const job of JOBS) {
         const x0=Math.min(...rects.map(r=>r.left)), y0=Math.min(...rects.map(r=>r.top));
         const x1=Math.max(...rects.map(r=>r.right)), y1=Math.max(...rects.map(r=>r.bottom));
         return { x:x0-R.x, y:y0-R.y, w:x1-x0, h:y1-y0 }; };
+      /* A run with an emoji in it cannot be a TextRenderer: the bundled typefaces are text
+         fonts with no emoji, and the engine has no fallback, so each one draws as a NO GLYPH
+         box. Such a run is captured as a picture of itself instead — same rule the in-page
+         capture applies, so both paths produce the same card. */
+      const EMOJI=/\p{Extended_Pictographic}/u;
+      const textEls=[];
       const walk=el=>{ for(const c of el.children){
         const own=[...c.childNodes].filter(n=>n.nodeType===3).map(n=>n.textContent).join('').trim();
         const r=c.getBoundingClientRect(), cs=getComputedStyle(c);
         if(own && !c.closest('svg') && r.width>0 && r.height>0 && cs.visibility!=='hidden' && +cs.opacity>0){
           const m=/rgba?\(([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+))?/.exec(cs.color)||[];
-          out.push({ text:own, x:r.x-R.x, y:r.y-R.y, w:r.width, h:r.height, tight:tightBox(c),
+          out.push({ asGraphic:EMOJI.test(own), text:own, x:r.x-R.x, y:r.y-R.y, w:r.width, h:r.height, tight:tightBox(c),
             family:(cs.fontFamily.split(',')[0]||'').trim().replace(/^["']|["']$/g,''),
             fontPx:parseFloat(cs.fontSize), weight:parseInt(cs.fontWeight)||400, align:cs.textAlign,
             lineHeight:parseFloat(cs.lineHeight)||parseFloat(cs.fontSize)*1.2,
             rgba:[(+m[1]||0)/255,(+m[2]||0)/255,(+m[3]||0)/255,m[4]===undefined?1:+m[4]] });
-          c.dataset._dcText='1';
+          c.dataset._dcText='1'; textEls.push(c);
         } walk(c); } };
       walk(root);
       const links=[...root.querySelectorAll('[data-url]')].map(e=>{ const r=e.getBoundingClientRect();
@@ -128,6 +134,11 @@ for (const job of JOBS) {
         gfx.push({ x:r.x-R.x, y:r.y-R.y, w:r.width, h:r.height, alpha,
                    name:(e.textContent||'').trim().replace(/\s+/g,' ').slice(0,24)||e.tagName.toLowerCase() });
       });
+      // the emoji-bearing runs join the graphics, so each is drawn from its own raster
+      out.forEach((L,i)=>{ if(!L.asGraphic) return;
+        const e=textEls[i]; e.dataset._dcGfx=String(gfx.length);
+        gfx.push({ x:L.x, y:L.y, w:L.w, h:L.h, alpha:1, name:(L.text||'').slice(0,24) }); });
+
       // The avatar region, whether or not a picture was set. A real avatar is an <img>;
       // with none, templates draw a placeholder icon-font glyph (ph-user) inside the frame,
       // and the FRAME is what we want — the glyph is only 82px inside a 282x250 box.

@@ -20,6 +20,7 @@ Steps, in order:
   03  sanitize       fediverse import: DOMParser bio stripping, URL and host allowlists
   04  import defaults an import fills what it can and leaves every other slot on its sample
   05  resonite      the Export for Resonite menu builds a .resonitepackage in the page
+  06  link urls     an absolute value is the href; Misskey fields peel down to a handle
 
 Afterwards, run the verification in tools/patch/README.md. Eyeballing is not enough — the
 font gate and the sanitizers both have browser tests, and both failures are invisible.
@@ -37,6 +38,7 @@ STEPS = [
     ("03_sanitize_import.py", "fediverse input sanitization"),
     ("04_import_keeps_defaults.py", "import leaves unfilled fields alone"),
     ("05_resonite_export.py", "Export for Resonite builds a real package"),
+    ("06_link_urls.py", "a link that is already a URL is not a handle"),
 ]
 # a cheap "has this already been patched?" probe — added by step 03
 ALREADY = "const SAFE_URL"

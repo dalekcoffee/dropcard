@@ -700,6 +700,18 @@ async function renderOverlay({ w, h, text = 'Add contact', plate, ink, fontBytes
 
 
 
+/* A text run with an emoji in it cannot be a TextRenderer.
+ *
+ * The typefaces a card uses are text fonts — Lexend, Poppins, Cormorant — and none of them
+ * carry emoji. Resonite has no font fallback chain, so every emoji in an exported run drew as a
+ * NO GLYPH box: "Dalek ☕🐱" came out as "Dalek □□". Custom server emoji are already fine, since
+ * the app renders those as <img> and they are captured as graphics.
+ *
+ * So a run containing emoji is captured as a picture of itself instead. It costs the ability to
+ * retype that one run in world, which is a smaller loss than the run being unreadable, and it
+ * keeps the card looking like the card. Runs without emoji are untouched and stay editable. */
+const HAS_EMOJI = /\p{Extended_Pictographic}/u;
+
 /* A text run's ELEMENT box is its layout box, routinely the full width of the card or column.
    Sizing a collider to that gives a band across the face that swallows the social chips. Range
    rects give the box the GLYPHS actually occupy, which is what anything clickable is cut to. */
@@ -736,7 +748,10 @@ async function captureFace(root, { scale = 2, bake = false } = {}) {
           family: (cs.fontFamily.split(',')[0] || '').trim().replace(/^["']|["']$/g, ''),
           fontPx: parseFloat(cs.fontSize), weight: parseInt(cs.fontWeight) || 400, align: cs.textAlign,
           lineHeight: parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2,
-          rgba: [(+m[1] || 0) / 255, (+m[2] || 0) / 255, (+m[3] || 0) / 255, m[4] === undefined ? 1 : +m[4]] });
+          rgba: [(+m[1] || 0) / 255, (+m[2] || 0) / 255, (+m[3] || 0) / 255, m[4] === undefined ? 1 : +m[4]],
+          // drawn as a picture instead of a TextRenderer — see HAS_EMOJI above. It stays in
+          // `layers` so add-contact can still find the name run by its text.
+          asGraphic: HAS_EMOJI.test(own) });
         textEls.push(c);
       }
       walk(c);
@@ -761,6 +776,14 @@ async function captureFace(root, { scale = 2, bake = false } = {}) {
     gfx.push({ x: r.x - R.x, y: r.y - R.y, w: r.width, h: r.height, alpha,
                name: (e.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 24) || e.tagName.toLowerCase() });
     gfxEls.push(e);
+  });
+
+  // the emoji-bearing runs join the graphics, so each is drawn from its own raster
+  layers.forEach((L, i) => {
+    if (!L.asGraphic) return;
+    const el = textEls[i];
+    gfx.push({ x: L.x, y: L.y, w: L.w, h: L.h, alpha: 1, name: L.text.slice(0, 24) });
+    gfxEls.push(el);
   });
 
   /* The avatar region, whether or not a picture was set. A real avatar is an <img>; with none,
@@ -1095,7 +1118,10 @@ async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, font
   const D = pf.D;
 
   const wanted = new Map();
-  if (!bake) for (const s of Object.keys(faces)) for (const L of faces[s].layers) wanted.set(`${L.family}|${L.weight}`, L);
+  // asGraphic runs are drawn from a raster, so they need no typeface of their own
+  const drawnAsText = L => !L.asGraphic;
+  if (!bake) for (const s of Object.keys(faces)) for (const L of faces[s].layers.filter(drawnAsText))
+    wanted.set(`${L.family}|${L.weight}`, L);
   const fonts = new Map(), isVariable = new Map();
   for (const [k, L] of wanted) {
     const { bytes, variable } = await fontFor(L.family, L.weight);
@@ -1359,7 +1385,10 @@ async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, font
         { w:CARD_W, h:CARD_H, queue:Q_PLATE, ownFlip:ON_THE_FACE }), [0,0,0]) ];
     // baked: the plate already carries both, so rebuilding them would double them up
     if (!bake && f.gfx?.length)   kids.push(px('Graphics', f.gfx.map(gfxSlot(side))));
-    if (!bake && f.layers.length) kids.push(px('Text', f.layers.map(textSlot)));
+    // a run with emoji in it is in f.gfx instead — no text font has the glyphs, and Resonite
+    // has no fallback, so a TextRenderer would draw NO GLYPH boxes
+    const asText = f.layers.filter(drawnAsText);
+    if (!bake && asText.length) kids.push(px('Text', asText.map(textSlot)));
     if (f.links?.length) kids.push(px('Links', f.links.map(linkSlot)));
     const ct = contacts[side];
     if (ct.length) { touchReport.push(...ct.map(t => ({ side, ...t })));
