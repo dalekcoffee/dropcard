@@ -13,6 +13,10 @@ the test for whether they may fill it. Wiping the samples first made every slot 
 So the wipe is removed and that test is widened instead — from "empty" to "empty or still the
 sample we shipped", which `blank()` already answers. A profile field still wins over a
 placeholder; a placeholder now survives when there is nothing to replace it with.
+
+Sample LINKS are the one thing still cleared. The rest of the placeholder data is inert — nobody
+acts on "Season: Fall" — but a leftover twitch.tv/SampleVT is a claim about where to find
+someone, and it is one a reader could follow to the wrong place.
 """
 import re, json, pathlib, sys
 
@@ -47,8 +51,13 @@ sub(
          with nothing to say what belongs in them. Anything the import can't speak to keeps
          the sample it already held, so it stays visible and obviously yours to edit. */
       if(u.about) F.about=u.about;
-      if(u.birthday){ const b=String(u.birthday).split('-'); if(b.length===3) F.birthday=(+b[1])+'/'+(+b[2]); }""",
-    "import no longer clears unfilled fields",
+      if(u.birthday){ const b=String(u.birthday).split('-'); if(b.length===3) F.birthday=(+b[1])+'/'+(+b[2]); }
+      /* Links are the one exception, and they go. A leftover "Season: Fall" reads as a
+         placeholder nobody would act on; a leftover twitch.tv/SampleVT reads as a claim about
+         where to find you, and it is one someone could actually follow. Whatever the profile
+         does supply is added back a few lines down. */
+      F.links=F.links.filter(l=>!sampleLink(l.key,(l.value||'').trim()));""",
+    "import no longer clears unfilled fields, except sample links",
 )
 
 # ── 2. a profile field must still beat a placeholder ─────────────────────────

@@ -25,13 +25,16 @@ const RICH = { ...BARE, fields: [
 
 // the sample values the card ships with, and where each one shows up on Classic ID
 const SAMPLES = ['they/them', 'English', 'Iced tea', 'Sample dish', 'Bugs', 'Just chatting'];
+// the sample LINKS, which are the one thing an import is supposed to clear: inert placeholder
+// text is harmless, but a social handle is a claim about where to find someone
+const SAMPLE_LINKS = ['SampleVT'];
 
 const b = await chromium.launch();
 let failed = 0;
 
-for (const [label, profile, expect] of [
-  ['bare profile keeps every sample', BARE, SAMPLES],
-  ['profile fields beat the samples', RICH, ['she/her', 'Japanese', 'Iced tea', 'Sample dish']],
+for (const [label, profile, expect, absent] of [
+  ['bare profile keeps every sample', BARE, SAMPLES, SAMPLE_LINKS],
+  ['profile fields beat the samples', RICH, ['she/her', 'Japanese', 'Iced tea', 'Sample dish', 'realvt'], SAMPLE_LINKS],
 ]) {
   const p = await b.newPage({ viewport: { width: 1500, height: 950 } });
   await p.route(`**://${HOST}/api/users/show`, r =>
@@ -47,15 +50,20 @@ for (const [label, profile, expect] of [
   await p.locator('button:has-text("Import")').last().click();
   await p.waitForTimeout(3000);
 
-  const card = await p.locator('#oshi-front-node').innerText();
+  // both faces: the links live on the back, the placeholder panels on the front
+  const front = await p.locator('#oshi-front-node').innerText();
+  const back = await p.locator('#oshi-back-node').innerText().catch(() => '');
+  const card = front + '\n' + back;
   const gone = expect.filter(s => !card.includes(s));
+  const lingering = (absent || []).filter(s => card.includes(s));
   const namedOK = card.includes('Sample User');   // the import did actually land
 
-  if (gone.length || !namedOK) {
+  if (gone.length || lingering.length || !namedOK) {
     failed++;
     console.log(`✗ ${label}`);
     if (!namedOK) console.log('    the import itself did not apply — name never reached the card');
     if (gone.length) console.log('    missing from the card after import: ' + gone.join(', '));
+    if (lingering.length) console.log('    sample links survived the import: ' + lingering.join(', '));
   } else {
     console.log(`✓ ${label}`);
   }
