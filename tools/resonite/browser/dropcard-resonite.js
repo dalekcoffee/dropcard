@@ -459,10 +459,15 @@ async function inlineCssUrls(root, missed) {
  *                 They keep their boxes — see the note at the marking pass below.
  * @returns {Promise<Uint8Array>} PNG bytes with a transparent background
  */
-async function rasterise(el, { scale = 2, hide = () => false, missed = null } = {}) {
+async function rasterise(el, { scale = 2, hide = () => false, missed = null, box = null } = {}) {
   const doc = el.ownerDocument;
   const rect = el.getBoundingClientRect();
-  const w = Math.round(rect.width), h = Math.round(rect.height);
+  /* `box` widens the frame beyond the element's own layout box, in its own coordinates, so
+     anything drawn outside it — an inline emoji hanging below the line — is not cut off. The
+     element keeps its size; the viewport grows and the element shifts inside it. */
+  const ox = box ? box.x : 0, oy = box ? box.y : 0;
+  const ew = Math.round(rect.width), eh = Math.round(rect.height);
+  const w = Math.round(box ? box.w : rect.width), h = Math.round(box ? box.h : rect.height);
 
   const clone = el.cloneNode(true);
   // Walk both trees together so the predicate sees the ORIGINAL nodes, which still have their
@@ -500,8 +505,8 @@ async function rasterise(el, { scale = 2, hide = () => false, missed = null } = 
   // off the card. `relative` neutralises the page position without changing what the
   // children resolve against.
   clone.setAttribute('style', (clone.getAttribute('style') || '') +
-    `;margin:0;position:relative;left:auto;top:auto;right:auto;bottom:auto;` +
-    `transform:none;width:${w}px;height:${h}px;`);
+    `;margin:0;position:relative;left:${-ox}px;top:${-oy}px;right:auto;bottom:auto;` +
+    `transform:none;width:${ew}px;height:${eh}px;`);
 
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
@@ -760,6 +765,15 @@ function tightBox(el, R) {
     rg.selectNodeContents(n);
     for (const r of rg.getClientRects()) if (r.width > 0 && r.height > 0) rects.push(r);
   }
+  /* A custom emoji is an <img> sitting in the middle of the run, and it is part of the name as
+     far as anyone reading the card is concerned. Measuring only the text nodes left it outside
+     the box twice over: the add-contact target stopped at "Dalek" and did not cover the emoji,
+     and the run's own raster was cut to the text, clipping an emoji that hangs below the line
+     into what looked like a second row. */
+  for (const im of el.querySelectorAll('img')) {
+    const r = im.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) rects.push(r);
+  }
   if (!rects.length) return null;
   const x0 = Math.min(...rects.map(r => r.left)), y0 = Math.min(...rects.map(r => r.top));
   const x1 = Math.max(...rects.map(r => r.right)), y1 = Math.max(...rects.map(r => r.bottom));
@@ -841,12 +855,19 @@ async function captureFace(root, { scale = 2, bake = false, missed = null } = {}
     gfxEls.push(e);
   });
 
-  // the emoji-bearing runs join the graphics, so each is drawn from its own raster
+  /* The emoji-bearing runs join the graphics, each drawn from its own raster — over a box that
+     covers the layout box AND everything drawn inside it. An inline emoji is taller than the
+     line it sits on, so rasterising the layout box alone cut its bottom off. */
+  const rasterBoxes = [];
   layers.forEach((L, i) => {
     if (!L.asGraphic) return;
-    const el = textEls[i];
-    gfx.push({ x: L.x, y: L.y, w: L.w, h: L.h, alpha: 1, name: L.text.slice(0, 24) });
-    gfxEls.push(el);
+    const t = L.tight || { x: L.x, y: L.y, w: L.w, h: L.h };
+    const x0 = Math.floor(Math.min(L.x, t.x)) - 1, y0 = Math.floor(Math.min(L.y, t.y)) - 1;
+    const x1 = Math.ceil(Math.max(L.x + L.w, t.x + t.w)) + 1;
+    const y1 = Math.ceil(Math.max(L.y + L.h, t.y + t.h)) + 1;
+    gfx.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, alpha: 1, name: L.text.slice(0, 24) });
+    gfxEls.push(textEls[i]);
+    rasterBoxes[gfxEls.length - 1] = { x: x0 - L.x, y: y0 - L.y, w: x1 - x0, h: y1 - y0 };
   });
 
   /* The avatar region, whether or not a picture was set. A real avatar is an <img>; with none,
@@ -888,7 +909,8 @@ async function captureFace(root, { scale = 2, bake = false, missed = null } = {}
   const hidden = new Set([...textEls, ...gfxEls]);
   const bg = await rasterise(root, { scale, missed, hide: bake ? undefined : (n => hidden.has(n)) });
   const gfxPngs = [];
-  if (!bake) for (const e of gfxEls) gfxPngs.push(await rasterise(e, { scale, missed }));
+  if (!bake) for (let i = 0; i < gfxEls.length; i++)
+    gfxPngs.push(await rasterise(gfxEls[i], { scale, missed, box: rasterBoxes[i] || null }));
 
   return { data: { card: { w: R.width, h: R.height }, layers, links, gfx, avatar }, bg, gfxPngs };
 }
@@ -1879,7 +1901,7 @@ const safeName = (s) => (String(s || '').trim().replace(/[^A-Za-z0-9._-]+/g, '-'
  *                    it as editable elements. Needs no typefaces, so it makes no requests.
  */
 async function exportResonite({ fields = {}, template = 'Card', bake = false,
-                                       dispenser = false, backing = 'rounded', backingColour = null,
+                                       dispenser = true, backing = 'rounded', backingColour = null,
                                        icon = 'auto', onProgress = () => {}, withOverlay = true } = {}) {
   if (dispenser && !BACKINGS[backing])
     throw new Error(`unknown backing "${backing}" — one of ${Object.keys(BACKINGS).join(', ')}`);
@@ -1972,8 +1994,7 @@ async function exportResonite({ fields = {}, template = 'Card', bake = false,
   const base = safeName(fields.Nickname || fields.Name || 'dropcard');
   return {
     blob: new Blob([result.bytes], { type: 'application/octet-stream' }),
-    filename: `${base}-${safeName(template).toLowerCase()}` +
-              `${dispenser ? '-dispenser' : ''}${bake ? '-baked' : ''}.resonitepackage`,
+    filename: `${base}-${safeName(template).toLowerCase()}${bake ? '-baked' : ''}.resonitepackage`,
     report: {
       widthMM: +(card.CARD_W * 1000).toFixed(1), heightMM: +(card.CARD_H * 1000).toFixed(1),
       fonts: card.fonts.size, embedded: embeds.length, bytes: result.bytes.length,

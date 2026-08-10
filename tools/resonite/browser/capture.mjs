@@ -32,6 +32,15 @@ function tightBox(el, R) {
     rg.selectNodeContents(n);
     for (const r of rg.getClientRects()) if (r.width > 0 && r.height > 0) rects.push(r);
   }
+  /* A custom emoji is an <img> sitting in the middle of the run, and it is part of the name as
+     far as anyone reading the card is concerned. Measuring only the text nodes left it outside
+     the box twice over: the add-contact target stopped at "Dalek" and did not cover the emoji,
+     and the run's own raster was cut to the text, clipping an emoji that hangs below the line
+     into what looked like a second row. */
+  for (const im of el.querySelectorAll('img')) {
+    const r = im.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) rects.push(r);
+  }
   if (!rects.length) return null;
   const x0 = Math.min(...rects.map(r => r.left)), y0 = Math.min(...rects.map(r => r.top));
   const x1 = Math.max(...rects.map(r => r.right)), y1 = Math.max(...rects.map(r => r.bottom));
@@ -113,12 +122,19 @@ export async function captureFace(root, { scale = 2, bake = false, missed = null
     gfxEls.push(e);
   });
 
-  // the emoji-bearing runs join the graphics, so each is drawn from its own raster
+  /* The emoji-bearing runs join the graphics, each drawn from its own raster — over a box that
+     covers the layout box AND everything drawn inside it. An inline emoji is taller than the
+     line it sits on, so rasterising the layout box alone cut its bottom off. */
+  const rasterBoxes = [];
   layers.forEach((L, i) => {
     if (!L.asGraphic) return;
-    const el = textEls[i];
-    gfx.push({ x: L.x, y: L.y, w: L.w, h: L.h, alpha: 1, name: L.text.slice(0, 24) });
-    gfxEls.push(el);
+    const t = L.tight || { x: L.x, y: L.y, w: L.w, h: L.h };
+    const x0 = Math.floor(Math.min(L.x, t.x)) - 1, y0 = Math.floor(Math.min(L.y, t.y)) - 1;
+    const x1 = Math.ceil(Math.max(L.x + L.w, t.x + t.w)) + 1;
+    const y1 = Math.ceil(Math.max(L.y + L.h, t.y + t.h)) + 1;
+    gfx.push({ x: x0, y: y0, w: x1 - x0, h: y1 - y0, alpha: 1, name: L.text.slice(0, 24) });
+    gfxEls.push(textEls[i]);
+    rasterBoxes[gfxEls.length - 1] = { x: x0 - L.x, y: y0 - L.y, w: x1 - x0, h: y1 - y0 };
   });
 
   /* The avatar region, whether or not a picture was set. A real avatar is an <img>; with none,
@@ -160,7 +176,8 @@ export async function captureFace(root, { scale = 2, bake = false, missed = null
   const hidden = new Set([...textEls, ...gfxEls]);
   const bg = await rasterise(root, { scale, missed, hide: bake ? undefined : (n => hidden.has(n)) });
   const gfxPngs = [];
-  if (!bake) for (const e of gfxEls) gfxPngs.push(await rasterise(e, { scale, missed }));
+  if (!bake) for (let i = 0; i < gfxEls.length; i++)
+    gfxPngs.push(await rasterise(gfxEls[i], { scale, missed, box: rasterBoxes[i] || null }));
 
   return { data: { card: { w: R.width, h: R.height }, layers, links, gfx, avatar }, bg, gfxPngs };
 }

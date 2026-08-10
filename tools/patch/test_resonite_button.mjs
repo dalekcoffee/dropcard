@@ -38,7 +38,7 @@ const hasApi = await p.evaluate(() => typeof window.dropcardResonite?.downloadWi
 console.log(hasApi ? '✓ the export bundle is present' : '✗ window.dropcardResonite is missing');
 let failed = hasApi ? 0 : 1;
 
-for (const [item, sideFirst] of [['Export standard', 'both'], ['Export dispenser', 'both'], ['Export baked', 'Front']]) {
+for (const [item, sideFirst] of [['Export standard', 'both'], ['Export baked', 'Front']]) {
   // start from a single-sided preview for the second run, to prove the handler restores it
   if (sideFirst !== 'both') {
     await p.locator(`button:has-text("${sideFirst}")`).first().click();

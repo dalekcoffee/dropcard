@@ -52,30 +52,6 @@ sub(
     "standard -> package",
 )
 sub(
-    """              <button class="btn btn-ghost" sc-camel-on-click="{{ onResBaked }}" style="justify-content:flex-start;align-items:flex-start;text-align:left;height:auto;padding:9px 10px">
-                <i class="ph ph-fire" style="margin-top:2px"></i>""",
-    """              <button class="btn btn-ghost" sc-camel-on-click="{{ onResDispenser }}" style="justify-content:flex-start;align-items:flex-start;text-align:left;height:auto;padding:9px 10px">
-                <i class="ph ph-hand-tap" style="margin-top:2px"></i>
-                <span style="display:flex;flex-direction:column;gap:2px;min-width:0">
-                  <span style="font-weight:600">Export dispenser</span>
-                  <span class="text-muted" style="font-size:11px;line-height:1.45;white-space:normal">A button that hands a copy of your card to whoever presses it. Hold it once and it learns your contact.</span>
-                </span>
-              </button>
-              <button class="btn btn-ghost" sc-camel-on-click="{{ onResBaked }}" style="justify-content:flex-start;align-items:flex-start;text-align:left;height:auto;padding:9px 10px">
-                <i class="ph ph-fire" style="margin-top:2px"></i>""",
-    "dispenser menu item",
-)
-
-sub(
-    """      resMenuOpen:!!s.resMenu, onToggleResMenu:this.toggleResMenu,
-      onResStandard:this.onResStandard, onResBaked:this.onResBaked,""",
-    """      resMenuOpen:!!s.resMenu, onToggleResMenu:this.toggleResMenu,
-      onResStandard:this.onResStandard, onResBaked:this.onResBaked,
-      onResDispenser:this.onResDispenser,""",
-    "dispenser handler binding",
-)
-
-sub(
     """  onResBaked = ()=>{ this.setState({resMenu:false}); setTimeout(()=>this.exportBaked(),40); };
   exportBaked = ()=>this.bakeSheet()""",
     """  onResBaked = ()=>{ this.setState({resMenu:false}); this.resExport(true); };
@@ -101,15 +77,14 @@ sub(
 
 sub(
     """  resExport = (baked)=>{""",
-    """  onResDispenser = ()=>{ this.setState({resMenu:false}); this.resExport(false, true); };
-  resExport = (baked, dispenser)=>{""",
+    """  resExport = (baked)=>{""",
     "dispenser handler",
 )
 
 sub(
     """    const go=()=>api.downloadWithStatus({ bake:baked, template:name,
         fields:{ Name:F.name, Nickname:F.nickname } })""",
-    """    const go=()=>api.downloadWithStatus({ bake:baked, dispenser:!!dispenser, template:name,
+    """    const go=()=>api.downloadWithStatus({ bake:baked, template:name,
         fields:{ Name:F.name, Nickname:F.nickname } })""",
     "pass the dispenser flag through",
 )

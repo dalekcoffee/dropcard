@@ -35,7 +35,7 @@ const safeName = (s) => (String(s || '').trim().replace(/[^A-Za-z0-9._-]+/g, '-'
  *                    it as editable elements. Needs no typefaces, so it makes no requests.
  */
 export async function exportResonite({ fields = {}, template = 'Card', bake = false,
-                                       dispenser = false, backing = 'rounded', backingColour = null,
+                                       dispenser = true, backing = 'rounded', backingColour = null,
                                        icon = 'auto', onProgress = () => {}, withOverlay = true } = {}) {
   if (dispenser && !BACKINGS[backing])
     throw new Error(`unknown backing "${backing}" — one of ${Object.keys(BACKINGS).join(', ')}`);
@@ -128,8 +128,7 @@ export async function exportResonite({ fields = {}, template = 'Card', bake = fa
   const base = safeName(fields.Nickname || fields.Name || 'dropcard');
   return {
     blob: new Blob([result.bytes], { type: 'application/octet-stream' }),
-    filename: `${base}-${safeName(template).toLowerCase()}` +
-              `${dispenser ? '-dispenser' : ''}${bake ? '-baked' : ''}.resonitepackage`,
+    filename: `${base}-${safeName(template).toLowerCase()}${bake ? '-baked' : ''}.resonitepackage`,
     report: {
       widthMM: +(card.CARD_W * 1000).toFixed(1), heightMM: +(card.CARD_H * 1000).toFixed(1),
       fonts: card.fonts.size, embedded: embeds.length, bytes: result.bytes.length,

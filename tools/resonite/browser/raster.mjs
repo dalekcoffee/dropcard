@@ -197,10 +197,15 @@ async function inlineCssUrls(root, missed) {
  *                 They keep their boxes — see the note at the marking pass below.
  * @returns {Promise<Uint8Array>} PNG bytes with a transparent background
  */
-export async function rasterise(el, { scale = 2, hide = () => false, missed = null } = {}) {
+export async function rasterise(el, { scale = 2, hide = () => false, missed = null, box = null } = {}) {
   const doc = el.ownerDocument;
   const rect = el.getBoundingClientRect();
-  const w = Math.round(rect.width), h = Math.round(rect.height);
+  /* `box` widens the frame beyond the element's own layout box, in its own coordinates, so
+     anything drawn outside it — an inline emoji hanging below the line — is not cut off. The
+     element keeps its size; the viewport grows and the element shifts inside it. */
+  const ox = box ? box.x : 0, oy = box ? box.y : 0;
+  const ew = Math.round(rect.width), eh = Math.round(rect.height);
+  const w = Math.round(box ? box.w : rect.width), h = Math.round(box ? box.h : rect.height);
 
   const clone = el.cloneNode(true);
   // Walk both trees together so the predicate sees the ORIGINAL nodes, which still have their
@@ -238,8 +243,8 @@ export async function rasterise(el, { scale = 2, hide = () => false, missed = nu
   // off the card. `relative` neutralises the page position without changing what the
   // children resolve against.
   clone.setAttribute('style', (clone.getAttribute('style') || '') +
-    `;margin:0;position:relative;left:auto;top:auto;right:auto;bottom:auto;` +
-    `transform:none;width:${w}px;height:${h}px;`);
+    `;margin:0;position:relative;left:${-ox}px;top:${-oy}px;right:auto;bottom:auto;` +
+    `transform:none;width:${ew}px;height:${eh}px;`);
 
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
