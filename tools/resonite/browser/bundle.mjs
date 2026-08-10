@@ -37,6 +37,7 @@ const FILES = [
   '../scene.mjs',
   '../instancer.mjs',
   './export.mjs',
+  './preview.mjs',
   './ui.mjs',
 ];
 
@@ -93,7 +94,7 @@ const out = `/* dropcard — Resonite export.
 
 ${parts.join('\n\n')}
 
-window.dropcardResonite = { exportResonite, downloadResonite, downloadWithStatus };
+window.dropcardResonite = { exportResonite, downloadResonite, downloadWithStatus, contactPreview };
 })();
 `;
 

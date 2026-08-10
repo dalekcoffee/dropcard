@@ -103,27 +103,21 @@ export async function renderButtonFace({ icon = 'auto', job, size = 512, ink,
  * reads the same on the card, on its dispenser and in the site's own menu. */
 const BADGE_LABEL = 'Add contact';
 
-export async function renderContactBadge({ w, h, plate, ink, fontBytes, family,
-                                           label = BADGE_LABEL, icon = 'landscape' }) {
-  const K = Math.max(3, Math.min(9, 640 / Math.max(1, w)));
-  const W = Math.round(w * K), H = Math.round(h * K);
-  const padX = Math.round(H * 0.40), gap = Math.round(H * 0.26);
-  const glyph = Math.round(H * 0.56);
-  const stack = fontBytes ? `"dc-badge-face", ${family || 'sans-serif'}` : (family || 'sans-serif');
+/**
+ * The chip as a live element, sized in whatever units the caller is working in — every metric
+ * inside it is a fraction of the height, so a 36px preview and a 324px render are the same
+ * design at two sizes.
+ *
+ * Split out so the PREVIEW on the site and the raster that goes into the package are built from
+ * one piece of markup rather than two that have to be kept looking alike.
+ */
+export function buildContactBadge({ w, h, plate, ink, family, stack,
+                                    label = BADGE_LABEL, icon = 'landscape' }) {
+  const padX = Math.round(h * 0.40), gap = Math.round(h * 0.26);
+  const glyph = Math.round(h * 0.56);
 
-  // Same trick overlay.mjs uses: the rasteriser's clone is sealed and can only draw with faces
-  // the document already declares, and a data: URI src passes through it untouched.
-  const style = document.createElement('style');
-  style.textContent = fontBytes
-    ? `@font-face{font-family:"dc-badge-face";src:url(data:font/ttf;base64,${b64(fontBytes)}) format("truetype")}`
-    : '';
-  document.head.appendChild(style);
-  if (fontBytes) { try { await document.fonts.load('16px "dc-badge-face"'); } catch { /* fall back */ } }
-
-  const host = document.createElement('div');
-  host.style.cssText = 'position:fixed;left:-20000px;top:0;z-index:-1;pointer-events:none';
   const box = document.createElement('div');
-  Object.assign(box.style, { width: `${W}px`, height: `${H}px`, borderRadius: `${H / 2}px`,
+  Object.assign(box.style, { width: `${w}px`, height: `${h}px`, borderRadius: `${h / 2}px`,
     background: plate, display: 'flex', alignItems: 'center', justifyContent: 'center',
     gap: `${gap}px`, boxSizing: 'border-box', padding: `0 ${padX}px`, overflow: 'hidden' });
 
@@ -138,20 +132,47 @@ export async function renderContactBadge({ w, h, plate, ink, fontBytes, family,
            s.style.width = '100%'; s.style.height = '100%'; }
 
   const span = document.createElement('span');
-  Object.assign(span.style, { fontFamily: stack, fontSize: `${Math.round(H * 0.46)}px`,
-    fontWeight: '600', lineHeight: '1', color: ink, whiteSpace: 'nowrap',
-    letterSpacing: '0.005em' });
+  Object.assign(span.style, { fontFamily: stack || family || 'sans-serif',
+    fontSize: `${Math.round(h * 0.46)}px`, fontWeight: '600', lineHeight: '1', color: ink,
+    whiteSpace: 'nowrap', letterSpacing: '0.005em' });
   span.textContent = label;
 
-  box.appendChild(mark); box.appendChild(span); host.appendChild(box);
+  box.appendChild(mark); box.appendChild(span);
+  box.__fit = () => {
+    /* One measuring pass, once the box is in a document. The chip's width comes from the card,
+       not from the label, so on a template where it had to shrink the words have to come back
+       to meet it — a chip reading "Add conta" is worse than a slightly small one. */
+    const room = w - padX * 2 - glyph - gap;
+    if (span.offsetWidth > room)
+      span.style.fontSize =
+        Math.max(6, Math.floor(parseFloat(span.style.fontSize) * room / span.offsetWidth)) + 'px';
+  };
+  return box;
+}
+
+export async function renderContactBadge({ w, h, plate, ink, fontBytes, family,
+                                           label = BADGE_LABEL, icon = 'landscape' }) {
+  // drawn large and scaled down onto the quad, so the lettering survives being read up close
+  const K = Math.max(3, Math.min(9, 640 / Math.max(1, w)));
+  const stack = fontBytes ? `"dc-badge-face", ${family || 'sans-serif'}` : (family || 'sans-serif');
+
+  // Same trick overlay.mjs uses: the rasteriser's clone is sealed and can only draw with faces
+  // the document already declares, and a data: URI src passes through it untouched.
+  const style = document.createElement('style');
+  style.textContent = fontBytes
+    ? `@font-face{font-family:"dc-badge-face";src:url(data:font/ttf;base64,${b64(fontBytes)}) format("truetype")}`
+    : '';
+  document.head.appendChild(style);
+  if (fontBytes) { try { await document.fonts.load('16px "dc-badge-face"'); } catch { /* fall back */ } }
+
+  const box = buildContactBadge({ w: Math.round(w * K), h: Math.round(h * K),
+                                  plate, ink, family, stack, label, icon });
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:-20000px;top:0;z-index:-1;pointer-events:none';
+  host.appendChild(box);
   document.body.appendChild(host);
   try {
-    /* One measuring pass. The chip's width comes from the card, not from the label, so on a
-       template where it had to shrink the words have to come back to meet it — and a chip
-       reading "Add conta" is worse than a slightly small one. */
-    const room = W - padX * 2 - glyph - gap;
-    if (span.offsetWidth > room)
-      span.style.fontSize = Math.max(8, Math.floor(parseFloat(span.style.fontSize) * room / span.offsetWidth)) + 'px';
+    box.__fit();
     return await rasterise(box, { scale: 1 });
   } finally { host.remove(); style.remove(); }
 }

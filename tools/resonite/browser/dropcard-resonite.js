@@ -1196,27 +1196,21 @@ async function renderButtonFace({ icon = 'auto', job, size = 512, ink,
  * reads the same on the card, on its dispenser and in the site's own menu. */
 const BADGE_LABEL = 'Add contact';
 
-async function renderContactBadge({ w, h, plate, ink, fontBytes, family,
-                                           label = BADGE_LABEL, icon = 'landscape' }) {
-  const K = Math.max(3, Math.min(9, 640 / Math.max(1, w)));
-  const W = Math.round(w * K), H = Math.round(h * K);
-  const padX = Math.round(H * 0.40), gap = Math.round(H * 0.26);
-  const glyph = Math.round(H * 0.56);
-  const stack = fontBytes ? `"dc-badge-face", ${family || 'sans-serif'}` : (family || 'sans-serif');
+/**
+ * The chip as a live element, sized in whatever units the caller is working in — every metric
+ * inside it is a fraction of the height, so a 36px preview and a 324px render are the same
+ * design at two sizes.
+ *
+ * Split out so the PREVIEW on the site and the raster that goes into the package are built from
+ * one piece of markup rather than two that have to be kept looking alike.
+ */
+function buildContactBadge({ w, h, plate, ink, family, stack,
+                                    label = BADGE_LABEL, icon = 'landscape' }) {
+  const padX = Math.round(h * 0.40), gap = Math.round(h * 0.26);
+  const glyph = Math.round(h * 0.56);
 
-  // Same trick overlay.mjs uses: the rasteriser's clone is sealed and can only draw with faces
-  // the document already declares, and a data: URI src passes through it untouched.
-  const style = document.createElement('style');
-  style.textContent = fontBytes
-    ? `@font-face{font-family:"dc-badge-face";src:url(data:font/ttf;base64,${b64(fontBytes)}) format("truetype")}`
-    : '';
-  document.head.appendChild(style);
-  if (fontBytes) { try { await document.fonts.load('16px "dc-badge-face"'); } catch { /* fall back */ } }
-
-  const host = document.createElement('div');
-  host.style.cssText = 'position:fixed;left:-20000px;top:0;z-index:-1;pointer-events:none';
   const box = document.createElement('div');
-  Object.assign(box.style, { width: `${W}px`, height: `${H}px`, borderRadius: `${H / 2}px`,
+  Object.assign(box.style, { width: `${w}px`, height: `${h}px`, borderRadius: `${h / 2}px`,
     background: plate, display: 'flex', alignItems: 'center', justifyContent: 'center',
     gap: `${gap}px`, boxSizing: 'border-box', padding: `0 ${padX}px`, overflow: 'hidden' });
 
@@ -1231,20 +1225,47 @@ async function renderContactBadge({ w, h, plate, ink, fontBytes, family,
            s.style.width = '100%'; s.style.height = '100%'; }
 
   const span = document.createElement('span');
-  Object.assign(span.style, { fontFamily: stack, fontSize: `${Math.round(H * 0.46)}px`,
-    fontWeight: '600', lineHeight: '1', color: ink, whiteSpace: 'nowrap',
-    letterSpacing: '0.005em' });
+  Object.assign(span.style, { fontFamily: stack || family || 'sans-serif',
+    fontSize: `${Math.round(h * 0.46)}px`, fontWeight: '600', lineHeight: '1', color: ink,
+    whiteSpace: 'nowrap', letterSpacing: '0.005em' });
   span.textContent = label;
 
-  box.appendChild(mark); box.appendChild(span); host.appendChild(box);
+  box.appendChild(mark); box.appendChild(span);
+  box.__fit = () => {
+    /* One measuring pass, once the box is in a document. The chip's width comes from the card,
+       not from the label, so on a template where it had to shrink the words have to come back
+       to meet it — a chip reading "Add conta" is worse than a slightly small one. */
+    const room = w - padX * 2 - glyph - gap;
+    if (span.offsetWidth > room)
+      span.style.fontSize =
+        Math.max(6, Math.floor(parseFloat(span.style.fontSize) * room / span.offsetWidth)) + 'px';
+  };
+  return box;
+}
+
+async function renderContactBadge({ w, h, plate, ink, fontBytes, family,
+                                           label = BADGE_LABEL, icon = 'landscape' }) {
+  // drawn large and scaled down onto the quad, so the lettering survives being read up close
+  const K = Math.max(3, Math.min(9, 640 / Math.max(1, w)));
+  const stack = fontBytes ? `"dc-badge-face", ${family || 'sans-serif'}` : (family || 'sans-serif');
+
+  // Same trick overlay.mjs uses: the rasteriser's clone is sealed and can only draw with faces
+  // the document already declares, and a data: URI src passes through it untouched.
+  const style = document.createElement('style');
+  style.textContent = fontBytes
+    ? `@font-face{font-family:"dc-badge-face";src:url(data:font/ttf;base64,${b64(fontBytes)}) format("truetype")}`
+    : '';
+  document.head.appendChild(style);
+  if (fontBytes) { try { await document.fonts.load('16px "dc-badge-face"'); } catch { /* fall back */ } }
+
+  const box = buildContactBadge({ w: Math.round(w * K), h: Math.round(h * K),
+                                  plate, ink, family, stack, label, icon });
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:-20000px;top:0;z-index:-1;pointer-events:none';
+  host.appendChild(box);
   document.body.appendChild(host);
   try {
-    /* One measuring pass. The chip's width comes from the card, not from the label, so on a
-       template where it had to shrink the words have to come back to meet it — and a chip
-       reading "Add conta" is worse than a slightly small one. */
-    const room = W - padX * 2 - glyph - gap;
-    if (span.offsetWidth > room)
-      span.style.fontSize = Math.max(8, Math.floor(parseFloat(span.style.fontSize) * room / span.offsetWidth)) + 'px';
+    box.__fit();
     return await rasterise(box, { scale: 1 });
   } finally { host.remove(); style.remove(); }
 }
@@ -1441,6 +1462,18 @@ const isSingleLine = L =>
    and not a collider, so the only thing extra width can do is stop a wrap. */
 const slackFor = L => isSingleLine(L) ? Math.max(6, L.fontPx * 0.9) : 0;
 
+/* Some templates DREW an add-contact button already — "ADD CONTACT" on the VR plate and profile
+   backs, "Add contact" on the VR social front. Those are buttons in every sense but the working
+   one, so they are found by their label and made real, rather than having a second button drawn
+   on top of a card that already looks like it has one. Matched loosely: friend or contact, any
+   case, since a card someone made before this shipped still says friend.
+
+   Exported because the preview and the placement sweep have to agree with the builder about
+   which templates already have one — three copies of this rule would eventually disagree. */
+const TEMPLATE_BUTTON = /^add\s*(friend|contact)$/i;
+const drewOwnButton = (face) =>
+  (face.layers || []).some(L => TEMPLATE_BUTTON.test((L.text || '').replace(/\s+/g, ' ').trim()));
+
 // ── FACING ──────────────────────────────────────────────────────────────────
 // Read this before adding anything visible. Three separate elements have shipped mirrored,
 // and every time the cause was the same: a rotation constant copied from a neighbour that
@@ -1629,16 +1662,9 @@ async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, font
       { w:g.w, h:g.h, tint:[1,1,1,g.alpha ?? 1], queue:Q_GFX, ownFlip:UNDER_PX }),
     [ (g.x+g.w/2)-PX_W/2, -((g.y+g.h/2)-PX_H/2), -GFX_Z ]);
 
-  /* Some templates DREW one already — "ADD FRIEND" on the VR plate and profile backs, "Add
-     Contact" on the VR social front. Those are buttons in every sense but the working one, so
-     they are found by their label and made real, rather than having a second button drawn on
-     top of a card that already looks like it has one. Matched loosely: friend or contact,
-     any case, since the templates set their own. */
-  const TEMPLATE_BUTTON = /^add\s*(friend|contact)$/i;
-
-  // Otherwise add-contact lives on the name and the profile picture rather than a separate
-  // button: no template needs a reserved spot, and it cannot cover the social chips. Identified
-  // by VALUE (the name field's text, the avatar's <img>) so no template markers are required.
+  // Beyond the button a template drew itself (TEMPLATE_BUTTON, above), add-contact lives on the
+  // name and the profile picture as well, identified by VALUE — the name field's text, the
+  // avatar's own box — so no template has to carry a marker for it.
   //
   // TouchButton is the slot's ITouchable — two ITouchables cannot share a slot, since
   // RaycastTouchSource resolves a single GetComponentInParentsUntilBlock — but ContactLink
@@ -2339,6 +2365,156 @@ async function downloadResonite(opts = {}) {
   return { filename, report };
 }
 
+// ──────────────────────── preview.mjs ────────────────────────
+// Show the add-contact button on the card in the site, before anyone exports anything.
+//
+// The button is placed by searching the face for a corner nothing is drawn in, which is the
+// right design — no template reserves a spot — but it made the result invisible until you had
+// the package open in Resonite. This draws it on the preview, in the place and the colours it
+// will actually have, so choosing a corner is a thing you can see rather than guess at.
+//
+// It is the SAME element the export rasterises (button.mjs buildContactBadge) at the SAME box
+// (badge.mjs badgeBox) in the SAME colours (overlay.mjs cardTheme, off the same plate the
+// exporter reads) — not a mock-up that has to be kept looking alike.
+//
+// Nothing is inserted into the app's own DOM. The overlay is a fixed-position layer on
+// document.body, clipped to the stage, positioned from the visible card's bounding box. The app
+// re-renders its whole card subtree on every keystroke; an unmanaged child inside it would be
+// destroyed, or worse, confuse the diff.
+
+
+
+
+
+
+
+
+
+const LAYER = 'data-dc-contact-preview';
+const SETTLE = 380;      // ms of quiet before the plate is read again
+
+let layer = null, chip = null, timer = 0, raf = 0;
+let want = { on: false, spot: 'auto', side: 'both' };
+let themeCache = null;   // { sig, theme }
+let reading = false;
+
+/* A fingerprint of what the front face currently looks like. Colours live in inline styles, so
+   two cards can differ only in a hex digit — the length of the markup is not enough to tell
+   them apart, and re-reading the plate on every keystroke is not affordable. */
+function fingerprint(el) {
+  const s = el.innerHTML;
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return `${h}|${s.length}|${Math.round(el.getBoundingClientRect().width)}`;
+}
+
+/** The card the user is looking at — not #oshi-front-node, which is the off-screen measuring copy. */
+function visibleFront(side) {
+  if (side === 'back') return null;
+  const stage = document.getElementById('oshi-stage');
+  if (!stage) return null;
+  /* The preview is drawn inside one scaled row. It is the first transformed element under the
+     stage in document order — the card's own transformed bits (a rotated stamp, a tilted photo)
+     are all descendants of it, so they can never be found first. */
+  const row = [...stage.querySelectorAll('div')].find(e =>
+    !e.closest('#oshi-front-node') && !e.closest('#oshi-back-node') &&
+    getComputedStyle(e).transform !== 'none' && e.children.length > 0);
+  const card = row?.children[0];              // front first, back second; back-only returned above
+  const r = card?.getBoundingClientRect();
+  return r && r.width > 8 ? { card, rect: r, stage: stage.getBoundingClientRect() } : null;
+}
+
+function teardown() {
+  cancelAnimationFrame(raf); raf = 0;
+  layer?.remove();
+  layer = chip = null;
+}
+
+/** Keep the overlay over the card as the stage scrolls, the window resizes, the card rescales. */
+function follow(box, cardW) {
+  cancelAnimationFrame(raf);
+  const tick = () => {
+    const v = visibleFront(want.side);
+    if (!want.on || !v || !layer) { teardown(); return; }
+    const k = v.rect.width / cardW;
+    Object.assign(layer.style, { left: `${v.stage.left}px`, top: `${v.stage.top}px`,
+      width: `${v.stage.width}px`, height: `${v.stage.height}px` });
+    Object.assign(chip.style, {
+      left: `${v.rect.left - v.stage.left + box.x * k}px`,
+      top: `${v.rect.top - v.stage.top + box.y * k}px`,
+      width: `${box.w * k}px`, height: `${box.h * k}px` });
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+}
+
+async function paint() {
+  const el = document.getElementById('oshi-front-node');
+  const v = visibleFront(want.side);
+  if (!want.on || !el || !v) { teardown(); return; }
+
+  const { data, textEls, gfxEls } = measureFace(el);
+  // a template that prints its own button is already showing it — a chip would be a second one
+  if (drewOwnButton(data)) { teardown(); return; }
+
+  const sig = fingerprint(el);
+  if (themeCache?.sig !== sig) {
+    /* A read is already in flight for an older card. Come back rather than dropping this one:
+       the in-flight read will store a fingerprint that no longer matches, and without a retry
+       the preview would sit on a stale colour until the next thing the user touched. */
+    if (reading) { clearTimeout(timer); timer = setTimeout(() => { paint().catch(teardown); }, SETTLE); return; }
+    reading = true;
+    try {
+      /* Exactly the plate the standard export reads its colours from: the face with its text
+         and graphics hidden. Reading a different picture would give a different accent, and the
+         preview would promise a colour the package does not deliver. */
+      const hidden = new Set([...textEls, ...gfxEls]);
+      const bg = await rasterise(el, { scale: 1, hide: (n) => hidden.has(n) });
+      themeCache = { sig, theme: await cardTheme(bg, { faces: { front: data } }) };
+    } catch { themeCache = themeCache || { sig, theme: null }; }
+    finally { reading = false; }
+    if (!want.on) { teardown(); return; }
+  }
+  const theme = themeCache?.theme;
+  if (!theme) { teardown(); return; }
+
+  const box = badgeBox(data, { spot: want.spot, extra: [] });
+  const k = v.rect.width / data.card.w;
+  const fam = (data.layers.find(L => L.family) || {}).family;
+
+  if (!layer) {
+    layer = document.createElement('div');
+    layer.setAttribute(LAYER, '');
+    // clipped to the stage, so a scrolled-away card does not leave its button floating
+    layer.style.cssText = 'position:fixed;overflow:hidden;pointer-events:none;z-index:30';
+    document.body.appendChild(layer);
+  }
+  chip?.remove();
+  chip = buildContactBadge({ w: Math.round(box.w * k), h: Math.round(box.h * k),
+                             plate: theme.accent, ink: inkFor(theme.accentRGB, theme),
+                             family: fam, icon: data.card.w >= data.card.h ? 'landscape' : 'vertical' });
+  chip.style.position = 'absolute';
+  // a hairline ring, only in the preview: the exported chip sits ON the card in world, and on a
+  // card whose accent is close to its paper the preview needs to read as an object on top of it
+  chip.style.boxShadow = '0 1px 4px rgba(0,0,0,.30)';
+  layer.appendChild(chip);
+  chip.__fit();
+  follow(box, data.card.w);
+}
+
+/**
+ * Called by the app on mount and on every update.
+ * @param on    whether the export will include the button
+ * @param spot  'auto' or a named corner — the same value the export is given
+ * @param side  which face the preview is showing; 'back' means there is nothing to draw on
+ */
+function contactPreview({ on = true, spot = 'auto', side = 'both' } = {}) {
+  want = { on, spot, side };
+  clearTimeout(timer);
+  if (!on || side === 'back') { teardown(); return; }
+  timer = setTimeout(() => { paint().catch(() => teardown()); }, SETTLE);
+}
+
 // ──────────────────────── ui.mjs ────────────────────────
 // A status line for the export, owned by this bundle rather than by the app.
 //
@@ -2465,5 +2641,5 @@ async function downloadWithStatus(opts = {}) {
   }
 }
 
-window.dropcardResonite = { exportResonite, downloadResonite, downloadWithStatus };
+window.dropcardResonite = { exportResonite, downloadResonite, downloadWithStatus, contactPreview };
 })();

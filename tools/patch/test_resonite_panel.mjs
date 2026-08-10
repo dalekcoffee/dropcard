@@ -60,15 +60,40 @@ const rail = p.locator('nav button:has-text("Resonite")');
 check(await rail.count() === 1, 'a Resonite tab in the rail');
 await rail.first().click();
 await p.waitForTimeout(600);
-check(await p.locator('aside h6:has-text("Card back")').count() === 1,
-      'the card back moved into it');
 check(await p.locator('aside h6:has-text("Add contact button")').count() === 1,
       'the add-contact settings are in it');
+check(await p.locator('aside h6:has-text("Card back")').count() === 0,
+      'and nothing else was dragged in with them');
 
+// card back has always lived under Layout and stays there — this tab is not a dumping ground
+// for everything with the word Resonite in it
 await p.locator('nav button:has-text("Layout")').first().click();
 await p.waitForTimeout(500);
-check(await p.locator('aside h6:has-text("Card back")').count() === 0,
-      'and left the Layout tab');
+check(await p.locator('aside h6:has-text("Card back")').count() === 1,
+      'the card back is still under Layout');
+
+// ── the preview draws the button before anything is exported ─────────────────
+const chip = p.locator('[data-dc-contact-preview]');
+await p.waitForTimeout(2500);
+check(await chip.count() === 1, 'the button is drawn on the preview');
+/* Where the preview has put it, in CARD pixels — the units the package uses. Read back through
+   the visible card's own box, so the stage's zoom cancels out. */
+const previewBox = () => p.evaluate(() => {
+  const chip = document.querySelector('[data-dc-contact-preview]')?.firstElementChild;
+  const front = document.getElementById('oshi-front-node');
+  const stage = document.getElementById('oshi-stage');
+  if (!chip || !front || !stage) return null;
+  const row = [...stage.querySelectorAll('div')].find(e =>
+    !e.closest('#oshi-front-node') && !e.closest('#oshi-back-node') &&
+    getComputedStyle(e).transform !== 'none' && e.children.length > 0);
+  const card = row.children[0].getBoundingClientRect();
+  const c = chip.getBoundingClientRect();
+  const k = card.width / front.getBoundingClientRect().width;
+  return { x: (c.left - card.left) / k, y: (c.top - card.top) / k,
+           w: c.width / k, h: c.height / k,
+           cardW: front.getBoundingClientRect().width, cardH: front.getBoundingClientRect().height };
+});
+const home = await previewBox();
 
 // ── and the settings reach the package ───────────────────────────────────────
 async function exportNow(label) {
@@ -90,9 +115,10 @@ await p.waitForTimeout(500);
 
 // off
 await p.locator('aside label.seg-opt:has-text("Include the button")').first().click();
-await p.waitForTimeout(400);
+await p.waitForTimeout(900);
 check(await p.locator('aside .field:has(> label:text-is("Where it sits"))').count() === 0,
       'the corner picker hides when the button is off');
+check(await chip.count() === 0, 'switching it off takes it off the preview too');
 let slots = await exportNow('off');
 check(!slots.some(isButton), 'switched off, no button in the package');
 check(slots.some(s => /add contact — (name|photo)/.test(s.name)),
@@ -101,11 +127,11 @@ check(slots.some(s => /add contact — (name|photo)/.test(s.name)),
 // on, in a named corner
 await p.locator('aside label.seg-opt:has-text("Include the button")').first().click();
 await p.waitForTimeout(400);
-await p.locator('aside select, aside sc-raw-select select').first()
-  .selectOption('top-left').catch(async () => {
-    await p.locator('aside sc-raw-select').first().selectOption('top-left');
-  });
-await p.waitForTimeout(500);
+await p.locator('aside select').first().selectOption('top-left');
+await p.waitForTimeout(2500);
+const moved = await previewBox();
+check(!!moved && moved.y < home.y - 20,
+      `picking a corner moves the preview (y ${Math.round(home.y)} → ${Math.round(moved.y)})`);
 slots = await exportNow('topleft');
 const btn = slots.find(isButton);
 check(!!btn, 'switched on, the button is in the package');
@@ -116,6 +142,15 @@ if (btn) {
   check(btn.pos[0] < 0 && btn.pos[1] > 0,
         `…in the top-left corner (x=${btn.pos[0].toFixed(4)}, y=${btn.pos[1].toFixed(4)})`);
   check(slots.some(s => s.path.endsWith(`${btn.name}/Chip`)), '…and it carries its artwork');
+
+  /* The point of the preview: it is not an impression of where the button might go, it is where
+     the button went. Slot positions are the box's CENTRE, card-centred, y up. */
+  if (moved) {
+    const cx = moved.x + moved.w / 2 - moved.cardW / 2;
+    const cy = -(moved.y + moved.h / 2 - moved.cardH / 2);
+    const off = Math.hypot(cx - btn.pos[0], cy - btn.pos[1]);
+    check(off < 2, `…exactly where the preview showed it (${off.toFixed(2)}px apart)`);
+  }
 }
 
 await b.close();

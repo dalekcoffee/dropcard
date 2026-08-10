@@ -1,9 +1,8 @@
 """A Resonite panel in the sidebar, and an add-contact button on every card.
 
-The export's own settings had nowhere to live. "Card back" sat under Layout with a note saying
-it was for Resonite, the add-contact button had no switch at all, and everything else about the
-export was decided in the two-item menu above the preview. This gives them a rail tab of their
-own — the same grouping every other kind of option already has.
+The add-contact button had no switch at all — everything about the export was decided in the
+two-item menu above the preview. This gives it a rail tab of its own, the same grouping every
+other kind of option already has.
 
 Three edits:
 
@@ -13,11 +12,14 @@ Three edits:
    works in world — but the card should say what the button does, and "contact" is the word
    Resonite itself uses.
 
-2. **A Resonite tab**, holding the card back (moved out of Layout, where it never belonged) and
-   the add-contact settings: whether to include the button, and which corner it takes.
+2. **A Resonite tab** holding the add-contact settings: whether to include the button, and which
+   corner it takes. Card back stays under Layout, where it has always been — it is picked while
+   you are choosing the card's shape, not while you are setting up an export.
 
-3. **The export handler passes them through.** Both menu items go through resExport, so standard
-   and baked pick the settings up together.
+3. **The export handler passes them through, and the preview shows the result.** Both menu items
+   go through resExport, so standard and baked pick the settings up together; and
+   componentDidUpdate hands the same two settings to the preview overlay, so where the button
+   goes and what it looks like is visible before anything is exported.
 
 Runs after 05, which is what puts resExport there in the first place.
 """
@@ -49,22 +51,7 @@ sub("""  { id:'Links',   name:'Links',   icon:'ph ph-link',            title:'So
   { id:'Resonite',name:'Resonite',icon:'ph ph-cube',            title:'Card back and add-contact button' },""",
     "Resonite tab in the rail")
 
-CARD_BACK = """<section style="margin-bottom:26px">
-        <h6 style="margin:0 0 4px">Card back <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0;font-size:11px">— for Resonite business cards</span></h6>
-        <p class="text-muted" style="font-size:12px;margin:0 0 10px">Pick a back design, then use <b style="color:var(--color-neutral-200);font-weight:600">Export for Resonite</b> — standard keeps every element editable in game, baked merges them so the card cannot be changed. Toggle Front / Back above the preview to see it.</p>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <sc-for list="{{ backChoices }}" as="bk" hint-placeholder-count="4">
-            <button sc-camel-on-click="{{ bk.onPick }}" style="{{ bk.style }}"><i class="{{ bk.icon }}" style="font-size:17px"></i><span style="font-size:13px;font-weight:600">{{ bk.name }}</span></button>
-          </sc-for>
-        </div>
-      </section>"""
-
-# lift it out of Layout — it is a Resonite setting and now has somewhere to be
-sub("\n\n      " + CARD_BACK + "\n", "\n", "card back leaves the Layout tab")
-
 PANEL = """      <sc-if value="{{ tabResonite }}" hint-placeholder-val="{{ false }}">
-      """ + CARD_BACK + """
-
       <section style="margin-bottom:26px">
         <h6 style="margin:0 0 4px">Add contact button</h6>
         <p class="text-muted" style="font-size:12px;margin:0 0 10px">Exported cards carry a button that adds you as a contact in Resonite. Templates that already print one have that made to work; the rest get a small chip in the card's own colours. Your name and your photo are always targets too.</p>
@@ -100,7 +87,36 @@ sub("""      tabCard:this.curTab()==='Card',     tabBatch:this.curTab()==='Batch
         {value:'top-left',label:'Top left'}],""",
     "Resonite panel state")
 
-# ── 3. through to the exporter ───────────────────────────────────────────────
+# ── 3. through to the exporter, and onto the preview ─────────────────────────
+# componentDidUpdate already runs on every state change, which is exactly when the card could
+# have moved, changed colour, or changed template. The overlay debounces for itself.
+sub("""  componentDidUpdate(){ const s=this.state; this.runFit();""",
+    """  componentDidUpdate(){ const s=this.state; this.runFit(); this.resPreview();""",
+    "preview follows every update")
+
+# and once on arrival, rather than relying on some later state change to trigger the first one
+sub("""    this.runFit();
+    this.measure();
+    const st = document.getElementById('oshi-stage');""",
+    """    this.runFit();
+    this.measure();
+    this.resPreview();
+    const st = document.getElementById('oshi-stage');""",
+    "preview drawn on arrival")
+
+sub("""  componentWillUnmount(){ if(this.ro) this.ro.disconnect();""",
+    """  /* Draw the add-contact button on the card, where it will land and in the colours it will
+     have. The overlay lives in the export bundle — it measures the same face the exporter
+     measures and reuses its placement — so a build without the bundle simply shows nothing
+     rather than showing a button that is not really there. */
+  resPreview = ()=>{ const api=window.dropcardResonite;
+    if(api && api.contactPreview) api.contactPreview({ on:this.state.resContact!==false,
+      spot:this.state.resSpot||'auto', side:this.state.side }); };
+  componentWillUnmount(){ const api=window.dropcardResonite;
+    if(api && api.contactPreview) api.contactPreview({on:false});
+    if(this.ro) this.ro.disconnect();""",
+    "preview torn down with the app")
+
 sub("""    const go=()=>api.downloadWithStatus({ bake:baked, template:name,
         fields:{ Name:F.name, Nickname:F.nickname } })""",
     """    const go=()=>api.downloadWithStatus({ bake:baked, template:name,

@@ -63,6 +63,18 @@ export const isSingleLine = L =>
    and not a collider, so the only thing extra width can do is stop a wrap. */
 export const slackFor = L => isSingleLine(L) ? Math.max(6, L.fontPx * 0.9) : 0;
 
+/* Some templates DREW an add-contact button already — "ADD CONTACT" on the VR plate and profile
+   backs, "Add contact" on the VR social front. Those are buttons in every sense but the working
+   one, so they are found by their label and made real, rather than having a second button drawn
+   on top of a card that already looks like it has one. Matched loosely: friend or contact, any
+   case, since a card someone made before this shipped still says friend.
+
+   Exported because the preview and the placement sweep have to agree with the builder about
+   which templates already have one — three copies of this rule would eventually disagree. */
+export const TEMPLATE_BUTTON = /^add\s*(friend|contact)$/i;
+export const drewOwnButton = (face) =>
+  (face.layers || []).some(L => TEMPLATE_BUTTON.test((L.text || '').replace(/\s+/g, ' ').trim()));
+
 // ── FACING ──────────────────────────────────────────────────────────────────
 // Read this before adding anything visible. Three separate elements have shipped mirrored,
 // and every time the cause was the same: a rotation constant copied from a neighbour that
@@ -251,16 +263,9 @@ export async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha25
       { w:g.w, h:g.h, tint:[1,1,1,g.alpha ?? 1], queue:Q_GFX, ownFlip:UNDER_PX }),
     [ (g.x+g.w/2)-PX_W/2, -((g.y+g.h/2)-PX_H/2), -GFX_Z ]);
 
-  /* Some templates DREW one already — "ADD FRIEND" on the VR plate and profile backs, "Add
-     Contact" on the VR social front. Those are buttons in every sense but the working one, so
-     they are found by their label and made real, rather than having a second button drawn on
-     top of a card that already looks like it has one. Matched loosely: friend or contact,
-     any case, since the templates set their own. */
-  const TEMPLATE_BUTTON = /^add\s*(friend|contact)$/i;
-
-  // Otherwise add-contact lives on the name and the profile picture rather than a separate
-  // button: no template needs a reserved spot, and it cannot cover the social chips. Identified
-  // by VALUE (the name field's text, the avatar's <img>) so no template markers are required.
+  // Beyond the button a template drew itself (TEMPLATE_BUTTON, above), add-contact lives on the
+  // name and the profile picture as well, identified by VALUE — the name field's text, the
+  // avatar's own box — so no template has to carry a marker for it.
   //
   // TouchButton is the slot's ITouchable — two ITouchables cannot share a slot, since
   // RaycastTouchSource resolves a single GetComponentInParentsUntilBlock — but ContactLink
