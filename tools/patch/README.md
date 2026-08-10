@@ -28,6 +28,10 @@ fix and calling Google on every page load again.
 | `01_brand_and_head.py` | OshiCard → dropcard; `<title>`, description, canonical, theme colour, OG/Twitter | Export ships no `<title>` at all |
 | `02_google_fonts_optin.py` | Google Fonts off until opted in | A raw export fetches from Google on load, before any interaction |
 | `03_sanitize_import.py` | `DOMParser` bio stripping; URL + host allowlists on fediverse import | Security fix |
+| `04_import_keeps_defaults.py` | an import fills what it can and leaves the rest on its sample | Behaviour the export does not ship |
+| `05_resonite_export.py` | the Export for Resonite menu builds a real `.resonitepackage` | Needs `tools/resonite/browser/dropcard-resonite.js` inlined |
+| `06_link_urls.py` | an absolute link value is the href; Misskey fields peel to a handle | Bug fix |
+| `07_resonite_panel.py` | a Resonite rail tab; every template's card gets an add-contact button | Panel + template wording |
 
 ## It fails loudly on purpose
 

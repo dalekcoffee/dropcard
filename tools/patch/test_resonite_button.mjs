@@ -40,8 +40,10 @@ let failed = hasApi ? 0 : 1;
 
 for (const [item, sideFirst] of [['Export standard', 'both'], ['Export baked', 'Front']]) {
   // start from a single-sided preview for the second run, to prove the handler restores it
+  // the Front / Back / Both switch is a radio in a label, not a button — `button:has-text`
+  // silently matched nothing here, so the restore check below was never really being run
   if (sideFirst !== 'both') {
-    await p.locator(`button:has-text("${sideFirst}")`).first().click();
+    await p.locator(`label.seg-opt:has-text("${sideFirst}")`).first().click();
     await p.waitForTimeout(700);
   }
   const before = await p.evaluate(() => !!document.getElementById('oshi-back-node'));

@@ -66,11 +66,18 @@ export function scanFamilies(root) {
 }
 
 /**
- * Measure one face and rasterise its plate and graphics.
+ * Measure one face: everything the builder needs to know about it, and nothing drawn yet.
+ *
+ * Split out from captureFace because rasterising is by far the expensive half — a sweep that
+ * only wants to know WHERE things are (browser/spots.mjs, which checks the add-contact button
+ * lands somewhere sensible on all forty-odd templates) would otherwise pay for pictures it
+ * throws away.
+ *
  * @param root  the card face element (#oshi-front-node / #oshi-back-node)
- * @param scale device pixels per CSS pixel; 2 matches what the Node capture produces
+ * @returns { data, textEls, gfxEls, rasterBoxes } — the elements are what captureFace hides
+ *          from the plate and then draws one by one
  */
-export async function captureFace(root, { scale = 2, bake = false, missed = null } = {}) {
+export function measureFace(root) {
   const R = root.getBoundingClientRect();
   const layers = [], gfxEls = [], textEls = [];
 
@@ -168,6 +175,17 @@ export async function captureFace(root, { scale = 2, bake = false, missed = null
     }
   }
 
+  return { data: { card: { w: R.width, h: R.height }, layers, links, gfx, avatar },
+           textEls, gfxEls, rasterBoxes };
+}
+
+/**
+ * Measure one face and rasterise its plate and graphics.
+ * @param scale device pixels per CSS pixel; 2 matches what the Node capture produces
+ */
+export async function captureFace(root, { scale = 2, bake = false, missed = null } = {}) {
+  const { data, textEls, gfxEls, rasterBoxes } = measureFace(root);
+
   /* The plate. Standard hides every text run and graphic so neither is baked into it — text
      becomes live TextRenderers in world and each graphic gets its own quad, which is what makes
      the card editable there. Baked keeps them, and then nothing else needs rendering at all.
@@ -179,7 +197,7 @@ export async function captureFace(root, { scale = 2, bake = false, missed = null
   if (!bake) for (let i = 0; i < gfxEls.length; i++)
     gfxPngs.push(await rasterise(gfxEls[i], { scale, missed, box: rasterBoxes[i] || null }));
 
-  return { data: { card: { w: R.width, h: R.height }, layers, links, gfx, avatar }, bg, gfxPngs };
+  return { data, bg, gfxPngs };
 }
 
 /**

@@ -78,7 +78,9 @@ for (const spec of TEMPLATES) {
   writeFileSync(path, Buffer.from(out.bytes));
   const r = out.report;
   console.log(`✓ ${template.padEnd(14)} ${(bake ? 'baked' : 'standard').padEnd(9)} ${r.widthMM}×${r.heightMM}mm  fonts=${r.fonts} ` +
-              `embedded=${r.embedded} contacts=${r.contacts}  ${(r.bytes / 1e6).toFixed(2)}MB  ` +
+              `embedded=${r.embedded} contacts=${r.contacts} button=${r.contactButton
+                ? r.contactButton.spot + (r.contactButton.over ? '(over art)' : '') : 'none'}  ` +
+              `${(r.bytes / 1e6).toFixed(2)}MB  ` +
               `${fontHits} font request(s)  ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   for (const n of r.notes) console.log(`    note: ${n}`);
 

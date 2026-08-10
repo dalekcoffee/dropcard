@@ -14,7 +14,8 @@ import { newEncoder } from './encoder.mjs';
 import { sha256 } from './pack.mjs';
 import { cardRoot, TV, CP } from '../scene.mjs';
 import { dispenserRoot } from '../instancer.mjs';
-import { renderButtonFace, BACKINGS } from './button.mjs';
+import { renderButtonFace, renderContactBadge, resolveIcon, BACKINGS } from './button.mjs';
+import { BADGE_SPOTS } from '../badge.mjs';
 import { inkFor } from '../colour.mjs';
 
 const hexToRGB = (h) => { const s = String(h || '').replace('#', '');
@@ -31,14 +32,20 @@ const safeName = (s) => (String(s || '').trim().replace(/[^A-Za-z0-9._-]+/g, '-'
  * @param onProgress  (step, detail) for a status line; every step is a network-free local
  *                    operation except 'fonts'
  * @param withOverlay draw the hover label on each add-contact target
+ * @param addContact  put a visible "Add contact" button on the card. Templates that drew one of
+ *                    their own have it made to work instead of getting a second one.
+ * @param contactSpot which corner it takes — 'auto' finds the emptiest one
  * @param bake        merge the card's artwork into one texture per side instead of rebuilding
  *                    it as editable elements. Needs no typefaces, so it makes no requests.
  */
 export async function exportResonite({ fields = {}, template = 'Card', bake = false,
                                        dispenser = true, backing = 'rounded', backingColour = null,
-                                       icon = 'auto', onProgress = () => {}, withOverlay = true } = {}) {
+                                       icon = 'auto', onProgress = () => {}, withOverlay = true,
+                                       addContact = true, contactSpot = 'auto' } = {}) {
   if (dispenser && !BACKINGS[backing])
     throw new Error(`unknown backing "${backing}" — one of ${Object.keys(BACKINGS).join(', ')}`);
+  if (addContact && !BADGE_SPOTS.includes(contactSpot))
+    throw new Error(`unknown contactSpot "${contactSpot}" — one of ${BADGE_SPOTS.join(', ')}`);
   const notes = [];
   const log = (m) => { notes.push(String(m).trim()); onProgress('note', String(m).trim()); };
 
@@ -89,16 +96,20 @@ export async function exportResonite({ fields = {}, template = 'Card', bake = fa
 
   const job = { template, faces, fields };
 
-  let theme = null, overlayFor = null;
-  if (withOverlay) {
-    theme = await cardTheme(imageFor('bg', 'front'), job);
-    overlayFor = (o) => renderOverlay(o);
-  }
+  /* Always read, not only when something asks for it: the hover label, the add-contact chip and
+     the dispenser's own face are all drawn in the card's colours, and reading them costs one
+     pass over a raster that is already in memory. */
+  const theme = await cardTheme(imageFor('bg', 'front'), job);
+  const overlayFor = withOverlay ? ((o) => renderOverlay(o)) : null;
+  const contactButton = addContact
+    ? { spot: contactSpot,
+        render: (o) => renderContactBadge({ ...o, icon: resolveIcon('auto', job) }) }
+    : null;
 
   onProgress('build', 'laying out the card in world');
   const { pf, asset, assets, embeds } = newEncoder();
   const card = await cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, fontFor,
-                                theme, overlayFor, userId: '', bake, log });
+                                theme, overlayFor, contactButton, userId: '', bake, log });
   /* The dispenser wraps the very same card. Its template ships with UserId EMPTY and the
      graph fills it in once, from whoever is HOLDING the dispenser — never from whoever presses
      it, so a stranger pressing your dispenser gets your card rather than becoming its owner.
@@ -133,6 +144,10 @@ export async function exportResonite({ fields = {}, template = 'Card', bake = fa
       widthMM: +(card.CARD_W * 1000).toFixed(1), heightMM: +(card.CARD_H * 1000).toFixed(1),
       fonts: card.fonts.size, embedded: embeds.length, bytes: result.bytes.length,
       contacts: card.touchReport.length, noPicture: card.noPic, notes, baked: bake, dispenser,
+      // where the add-contact button ended up, or that the template had already drawn one
+      contactButton: card.drawnByTemplate ? { spot: 'template' }
+        : card.badge ? { spot: card.badge.spot, x: card.badge.x, y: card.badge.y,
+                         w: card.badge.w, h: card.badge.h, over: !!card.badge.over } : null,
     },
   };
 }

@@ -799,11 +799,18 @@ function scanFamilies(root) {
 }
 
 /**
- * Measure one face and rasterise its plate and graphics.
+ * Measure one face: everything the builder needs to know about it, and nothing drawn yet.
+ *
+ * Split out from captureFace because rasterising is by far the expensive half — a sweep that
+ * only wants to know WHERE things are (browser/spots.mjs, which checks the add-contact button
+ * lands somewhere sensible on all forty-odd templates) would otherwise pay for pictures it
+ * throws away.
+ *
  * @param root  the card face element (#oshi-front-node / #oshi-back-node)
- * @param scale device pixels per CSS pixel; 2 matches what the Node capture produces
+ * @returns { data, textEls, gfxEls, rasterBoxes } — the elements are what captureFace hides
+ *          from the plate and then draws one by one
  */
-async function captureFace(root, { scale = 2, bake = false, missed = null } = {}) {
+function measureFace(root) {
   const R = root.getBoundingClientRect();
   const layers = [], gfxEls = [], textEls = [];
 
@@ -901,6 +908,17 @@ async function captureFace(root, { scale = 2, bake = false, missed = null } = {}
     }
   }
 
+  return { data: { card: { w: R.width, h: R.height }, layers, links, gfx, avatar },
+           textEls, gfxEls, rasterBoxes };
+}
+
+/**
+ * Measure one face and rasterise its plate and graphics.
+ * @param scale device pixels per CSS pixel; 2 matches what the Node capture produces
+ */
+async function captureFace(root, { scale = 2, bake = false, missed = null } = {}) {
+  const { data, textEls, gfxEls, rasterBoxes } = measureFace(root);
+
   /* The plate. Standard hides every text run and graphic so neither is baked into it — text
      becomes live TextRenderers in world and each graphic gets its own quad, which is what makes
      the card editable there. Baked keeps them, and then nothing else needs rendering at all.
@@ -912,7 +930,7 @@ async function captureFace(root, { scale = 2, bake = false, missed = null } = {}
   if (!bake) for (let i = 0; i < gfxEls.length; i++)
     gfxPngs.push(await rasterise(gfxEls[i], { scale, missed, box: rasterBoxes[i] || null }));
 
-  return { data: { card: { w: R.width, h: R.height }, layers, links, gfx, avatar }, bg, gfxPngs };
+  return { data, bg, gfxPngs };
 }
 
 /**
@@ -1073,10 +1091,14 @@ function newEncoder() {
 }
 
 // ──────────────────────── button.mjs ────────────────────────
-// The dispenser's button face: one of the two card icons on a backing, in the card's colours.
+// The buttons this exporter draws, in the card's own colours.
 //
-// Ports icon.mjs's renderButtonFace off Playwright and pngjs. Deliberately NOT card-shaped — it
-// has to read as something to press rather than as another card lying around.
+//   renderButtonFace     the dispenser's face: one of the two card icons on a backing. Ports
+//                        icon.mjs's off Playwright and pngjs. Deliberately NOT card-shaped —
+//                        it has to read as something to press rather than as another card
+//                        lying around.
+//   renderContactBadge   the "Add contact" chip that sits on the card itself.
+
 
 
 
@@ -1164,6 +1186,195 @@ async function renderButtonFace({ icon = 'auto', job, size = 512, ink,
   return { png, icon: which };
 }
 
+/* ── the add-contact chip ────────────────────────────────────────────────────
+ *
+ * Drawn rather than assembled from a text run and a quad, for the same reason the hover label
+ * is: it has to look like it belongs to the template, and a TextRenderer would need the card's
+ * typeface embedded even for a baked export, which otherwise pulls no fonts at all.
+ *
+ * The card icon carries the label. It is the mark the dispenser already uses, so a dropcard
+ * reads the same on the card, on its dispenser and in the site's own menu. */
+const BADGE_LABEL = 'Add contact';
+
+async function renderContactBadge({ w, h, plate, ink, fontBytes, family,
+                                           label = BADGE_LABEL, icon = 'landscape' }) {
+  const K = Math.max(3, Math.min(9, 640 / Math.max(1, w)));
+  const W = Math.round(w * K), H = Math.round(h * K);
+  const padX = Math.round(H * 0.40), gap = Math.round(H * 0.26);
+  const glyph = Math.round(H * 0.56);
+  const stack = fontBytes ? `"dc-badge-face", ${family || 'sans-serif'}` : (family || 'sans-serif');
+
+  // Same trick overlay.mjs uses: the rasteriser's clone is sealed and can only draw with faces
+  // the document already declares, and a data: URI src passes through it untouched.
+  const style = document.createElement('style');
+  style.textContent = fontBytes
+    ? `@font-face{font-family:"dc-badge-face";src:url(data:font/ttf;base64,${b64(fontBytes)}) format("truetype")}`
+    : '';
+  document.head.appendChild(style);
+  if (fontBytes) { try { await document.fonts.load('16px "dc-badge-face"'); } catch { /* fall back */ } }
+
+  const host = document.createElement('div');
+  host.style.cssText = 'position:fixed;left:-20000px;top:0;z-index:-1;pointer-events:none';
+  const box = document.createElement('div');
+  Object.assign(box.style, { width: `${W}px`, height: `${H}px`, borderRadius: `${H / 2}px`,
+    background: plate, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    gap: `${gap}px`, boxSizing: 'border-box', padding: `0 ${padX}px`, overflow: 'hidden' });
+
+  const mark = document.createElement('div');
+  Object.assign(mark.style, { width: `${glyph}px`, height: `${glyph}px`, flex: 'none', display: 'flex' });
+  mark.innerHTML = (CARD_ICONS[icon] || CARD_ICONS.landscape)
+    .replace(/<\?xml[^>]*\?>/, '')
+    .replace(/fill="#000000"/g, `fill="${ink}"`)
+    .replace(/(width|height)="\d+px"/g, '');
+  const s = mark.querySelector('svg');
+  if (s) { s.setAttribute('width', '100%'); s.setAttribute('height', '100%');
+           s.style.width = '100%'; s.style.height = '100%'; }
+
+  const span = document.createElement('span');
+  Object.assign(span.style, { fontFamily: stack, fontSize: `${Math.round(H * 0.46)}px`,
+    fontWeight: '600', lineHeight: '1', color: ink, whiteSpace: 'nowrap',
+    letterSpacing: '0.005em' });
+  span.textContent = label;
+
+  box.appendChild(mark); box.appendChild(span); host.appendChild(box);
+  document.body.appendChild(host);
+  try {
+    /* One measuring pass. The chip's width comes from the card, not from the label, so on a
+       template where it had to shrink the words have to come back to meet it — and a chip
+       reading "Add conta" is worse than a slightly small one. */
+    const room = W - padX * 2 - glyph - gap;
+    if (span.offsetWidth > room)
+      span.style.fontSize = Math.max(8, Math.floor(parseFloat(span.style.fontSize) * room / span.offsetWidth)) + 'px';
+    return await rasterise(box, { scale: 1 });
+  } finally { host.remove(); style.remove(); }
+}
+
+// ──────────────────────── badge.mjs ────────────────────────
+// Where the "Add contact" button goes on a card face.
+//
+// Pure geometry, no DOM and no Node, so the same placement runs in the build script and in the
+// page — and can be tested on a captured face without rendering anything.
+//
+// The problem it solves: add-contact used to live only on the name run and the profile picture.
+// That works when a template HAS both, and reads as nothing at all when it does not — a card
+// whose name is drawn as artwork, or which shows no photo, exported with no way to add the
+// person. Every template gets a real button instead, and the only question left is where it can
+// sit without covering something.
+//
+// The answer is found rather than declared: no template needs to reserve a spot, and none of
+// them has to be edited when one is added. The face's own measurements say what is occupied,
+// and the button takes the emptiest corner that is left.
+
+/** How big the button is, relative to the card. Chip-sized — it sits among the social chips. */
+const H_FRAC = 0.058, H_MIN = 24, H_MAX = 46, ASPECT = 3.4;
+/** Clear space kept around anything already drawn, and around the card's own edge. */
+const CLEAR = 8, MARGIN_FRAC = 0.035;
+/** Tried in order until one fits; below the last the button is too small to read. */
+const SHRINK = [1, 0.88, 0.76, 0.64];
+
+/* Corners, in the order a reader's eye forgives them. Bottom-right first: on a landscape card
+   the top is the name and the left is the picture, and on a portrait one the bottom strip is
+   the only band that is reliably free. The weights only break ties between corners that all
+   have room — a corner that actually fits always beats a preferred one that does not. */
+const CORNERS = [
+  { spot: 'bottom-right', ax: 1, ay: 1, weight: 1.00 },
+  { spot: 'bottom-left',  ax: 0, ay: 1, weight: 1.06 },
+  { spot: 'top-right',    ax: 1, ay: 0, weight: 1.18 },
+  { spot: 'top-left',     ax: 0, ay: 0, weight: 1.26 },
+];
+
+const BADGE_SPOTS = ['auto', ...CORNERS.map(c => c.spot)];
+
+const inflate = (r, p) => ({ x: r.x - p, y: r.y - p, w: r.w + 2 * p, h: r.h + 2 * p });
+const hits = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+/** Everything on this face a button must not cover. */
+function occupancy(face, extra = []) {
+  const out = [];
+  for (const L of face.layers || []) out.push(L.tight || { x: L.x, y: L.y, w: L.w, h: L.h });
+  for (const g of face.gfx || []) out.push({ x: g.x, y: g.y, w: g.w, h: g.h });
+  for (const l of face.links || []) out.push({ x: l.x, y: l.y, w: l.w, h: l.h });
+  if (face.avatar) out.push({ x: face.avatar.x, y: face.avatar.y, w: face.avatar.w, h: face.avatar.h });
+  for (const e of extra) out.push({ x: e.x, y: e.y, w: e.w, h: e.h });
+  return out.map(r => inflate(r, CLEAR));
+}
+
+/** Every position the button may take, stepped across the face and always including the edges. */
+function candidates(len, size, margin, step) {
+  const last = len - margin - size;
+  if (last < margin) return [];
+  const out = [];
+  for (let v = margin; v < last; v += step) out.push(v);
+  out.push(last);
+  return out;
+}
+
+/** The free position nearest this corner, or null if the corner has no room at all. */
+function nearestFree(corner, { W, H, w, h, margin, blocked, step }) {
+  const xs = candidates(W, w, margin, step), ys = candidates(H, h, margin, step);
+  if (!xs.length || !ys.length) return null;
+  const cx = corner.ax ? xs[xs.length - 1] : xs[0];
+  const cy = corner.ay ? ys[ys.length - 1] : ys[0];
+  let best = null;
+  for (const y of ys) for (const x of xs) {
+    const box = { x, y, w, h };
+    if (blocked.some(o => hits(box, o))) continue;
+    const d = Math.hypot(x - cx, y - cy);
+    if (!best || d < best.d) best = { d, box };
+  }
+  return best;
+}
+
+/**
+ * Pick the button's box on a face.
+ *
+ * @param face   one side of a capture — { card, layers, gfx, links, avatar }
+ * @param spot   'auto' or one of BADGE_SPOTS; an explicit corner is honoured even if it has to
+ *               shrink or, in the last resort, overlap
+ * @param extra  boxes that are not in the capture but are already spoken for — the name and
+ *               photo contact targets, which are placed before this one
+ * @returns { x, y, w, h, spot, tight, over } — `tight` means it had to shrink, `over` means
+ *          nothing was free and it is sitting on top of the card's own artwork
+ */
+function badgeBox(face, { spot = 'auto', extra = [] } = {}) {
+  const W = face.card.w, H = face.card.h;
+  const short = Math.min(W, H);
+  const margin = Math.round(short * MARGIN_FRAC);
+  const h0 = Math.round(Math.max(H_MIN, Math.min(H_MAX, short * H_FRAC)));
+  const step = Math.max(4, Math.round(short / 100));
+
+  const wanted = spot === 'auto' ? CORNERS : CORNERS.filter(c => c.spot === spot);
+  if (!wanted.length) throw new Error(`unknown add-contact spot "${spot}" — one of ${BADGE_SPOTS.join(', ')}`);
+
+  const solid = occupancy(face, extra);
+  // decoration is worth covering before the button is shrunk past legibility or dropped
+  // altogether: a pattern behind the corner is not information, a line of text is
+  const firm = occupancy({ ...face, gfx: [] }, extra);
+
+  for (const blocked of [solid, firm]) {
+    for (const k of SHRINK) {
+      const h = Math.round(h0 * k), w = Math.round(h * ASPECT);
+      if (w > W - 2 * margin) continue;
+      let best = null;
+      for (const c of wanted) {
+        const f = nearestFree(c, { W, H, w, h, margin, blocked, step });
+        if (!f) continue;
+        const score = f.d * c.weight;
+        if (!best || score < best.score) best = { score, box: f.box, spot: c.spot };
+      }
+      if (best) return { ...best.box, spot: best.spot, tight: k < 1, over: blocked === firm };
+    }
+  }
+
+  /* Nothing was free at any size. Put it in the preferred corner anyway: a button that overlaps
+     the artwork is recoverable — it can be dragged in world — and no button is not. */
+  const c = wanted[0];
+  const h = Math.round(h0 * SHRINK[SHRINK.length - 1]), w = Math.round(h * ASPECT);
+  return { x: c.ax ? Math.max(margin, W - margin - w) : margin,
+           y: c.ay ? Math.max(margin, H - margin - h) : margin,
+           w: Math.min(w, W - 2 * margin), h, spot: c.spot, tight: true, over: true };
+}
+
 // ──────────────────────── scene.mjs ────────────────────────
 // The card scene: one .resonitepackage-shaped slot tree, built from a captured face set.
 //
@@ -1176,10 +1387,13 @@ async function renderButtonFace({ icon = 'auto', job, size = 512, ink,
 //   sha256(bytes)              async hex digest
 //   fontFor(family, weight)    async -> { bytes, variable }
 //   overlayFor({...})          async -> PNG bytes for a hover label, or omit for none
+//   contactButton              { spot, render({...}) -> PNG bytes } for the drawn "Add contact"
+//                              chip, or null to leave the card with only its implicit targets
 //   theme                      { surfaceRGB, accentRGB } for those overlays, or omit
 //   userId                     baked into every ContactLink; normally '' and filled by the dispenser
 //
 // The two drivers are build_batch.mjs (Playwright + files) and browser/export.mjs (in-page).
+
 
 
 const FE = '[FrooxEngine]FrooxEngine.';
@@ -1211,6 +1425,21 @@ if (SHIELD_Z + SHIELD_DEPTH / 2 >= Math.min(LINK_Z, CONTACT_Z) - Math.max(LINK_D
 const SIZE_GAIN = 10, LH_BASIS = 0.8 / 1.2;
 const ALIGN = { left:'Left', center:'Center', right:'Right', justify:'Justify', start:'Left', end:'Right' };
 const slug = t => (t.replace(/\s+/g,' ').trim().slice(0,24) || 'Text');
+
+/* Did the browser fit this run on one line?
+ *
+ * The GLYPH height decides it, not the element's. A chip pads its text, so its box can be twice
+ * the line height while holding a single line; the box the glyphs occupy cannot. Runs the
+ * browser wrapped are left exactly as they are — their line breaks are part of the layout.
+ *
+ * Exported so browser/bounds.mjs checks the same runs the builder padded, rather than a second
+ * copy of this rule that could drift from it.
+ */
+const isSingleLine = L =>
+  !/[\n\r]/.test(L.text) && Math.min(L.h, L.tight?.h ?? L.h) < L.lineHeight * 1.75;
+/* How much room to leave beyond the measured width. Generous on purpose: bounds are not drawn
+   and not a collider, so the only thing extra width can do is stop a wrap. */
+const slackFor = L => isSingleLine(L) ? Math.max(6, L.fontPx * 0.9) : 0;
 
 // ── FACING ──────────────────────────────────────────────────────────────────
 // Read this before adding anything visible. Three separate elements have shipped mirrored,
@@ -1293,8 +1522,8 @@ const dilateFor = (weight, variable) =>
  * colliders, and baking artwork is no reason to stop the card working. It also means a baked
  * export needs no typefaces at all — nothing draws glyphs — so it makes no network requests. */
 async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, fontFor,
-                                overlayFor = null, theme = null, userId = '', bake = false,
-                                log = () => {} }) {
+                                overlayFor = null, contactButton = null, theme = null,
+                                userId = '', bake = false, log = () => {} }) {
   const faces = job.faces;
   const PX_W = faces.front.card.w, PX_H = faces.front.card.h;
   const S = LONG_EDGE / Math.max(PX_W, PX_H);
@@ -1357,17 +1586,37 @@ async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, font
     return [quad.comp, rend.comp];
   }
 
-  const textSlot = (L,i) => pf.makeSlot(`${String(i+1).padStart(2,'0')} ${slug(L.text)}`,
+  /* Slack, so a line the browser fitted does not wrap in world.
+   *
+   * A bounded TextRenderer breaks at BoundsSize, and the browser's line box is measured to the
+   * pixel — the box around "dalekcoffee" is exactly as wide as "dalekcoffee". The engine's MSDF
+   * layout rounds advances its own way, and over a dozen characters the difference is enough to
+   * push the last glyph out: the chip came back as "dalekcoffe" above a lone "e", spilling
+   * outside the chip's own artwork.
+   *
+   * Only SINGLE-LINE runs are widened. A run the browser already broke has a wrap pattern that
+   * is part of the layout, and giving it a wider box would re-break it somewhere else.
+   *
+   * The slot then moves by half the slack, so the edge the text is aligned to stays exactly
+   * where it was measured — the bounds grow away from the alignment, and nothing on the card
+   * shifts. Height grows symmetrically and needs no compensation, since the text is centred in
+   * it vertically; it costs nothing and keeps a tall glyph off the boundary. */
+  const textSlot = (L,i) => {
+    const align = ALIGN[L.align] ?? 'Left';
+    const slack = slackFor(L);
+    const dx = align === 'Left' || align === 'Justify' ? slack/2 : align === 'Right' ? -slack/2 : 0;
+    return pf.makeSlot(`${String(i+1).padStart(2,'0')} ${slug(L.text)}`,
     [pf.component(CP.TextRenderer, {
       Text:L.text, ParseRichText:false, NullText:null, Size:D(L.fontPx*SIZE_GAIN),
-      HorizontalAlign:ALIGN[L.align] ?? 'Left', VerticalAlign:'Middle', AlignmentMode:'Geometric',
+      HorizontalAlign:align, VerticalAlign:'Middle', AlignmentMode:'Geometric',
       Color:[D(L.rgba[0]),D(L.rgba[1]),D(L.rgba[2]),D(L.rgba[3]),'sRGB'],
       Materials:pf.list([textMat(dilateFor(L.weight, isVariable.get(`${L.family}|${L.weight}`))).id]),
       LineHeight:D((L.lineHeight/L.fontPx)*LH_BASIS),
-      Bounded:true, BoundsSize:[D(L.w),D(L.h)], BoundsAlignment:'MiddleCenter',
+      Bounded:true, BoundsSize:[D(L.w+slack),D(L.h+slack/2)], BoundsAlignment:'MiddleCenter',
       MaskPattern:null, HorizontalAutoSize:false, VerticalAutoSize:false,
       Font:fonts.get(`${L.family}|${L.weight}`).id }).comp],
-    [ (L.x+L.w/2)-PX_W/2, -((L.y+L.h/2)-PX_H/2), -TEXT_Z ]);
+    [ (L.x+L.w/2+dx)-PX_W/2, -((L.y+L.h/2)-PX_H/2), -TEXT_Z ]);
+  };
 
   const linkSlot = (L,i) => pf.makeSlot(`${String(i+1).padStart(2,'0')} ${L.network}${L.handle?' '+L.handle:''}`,
     [ pf.component(CP.BoxCollider, { Size:[D(L.w),D(L.h),D(LINK_DEPTH)], Type:'Static',
@@ -1380,9 +1629,16 @@ async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, font
       { w:g.w, h:g.h, tint:[1,1,1,g.alpha ?? 1], queue:Q_GFX, ownFlip:UNDER_PX }),
     [ (g.x+g.w/2)-PX_W/2, -((g.y+g.h/2)-PX_H/2), -GFX_Z ]);
 
-  // Add-contact lives on the name and the profile picture rather than a separate button:
-  // no template needs a reserved spot, and it cannot cover the social chips. Identified by
-  // VALUE (the name field's text, the avatar's <img>) so no template markers are required.
+  /* Some templates DREW one already — "ADD FRIEND" on the VR plate and profile backs, "Add
+     Contact" on the VR social front. Those are buttons in every sense but the working one, so
+     they are found by their label and made real, rather than having a second button drawn on
+     top of a card that already looks like it has one. Matched loosely: friend or contact,
+     any case, since the templates set their own. */
+  const TEMPLATE_BUTTON = /^add\s*(friend|contact)$/i;
+
+  // Otherwise add-contact lives on the name and the profile picture rather than a separate
+  // button: no template needs a reserved spot, and it cannot cover the social chips. Identified
+  // by VALUE (the name field's text, the avatar's <img>) so no template markers are required.
   //
   // TouchButton is the slot's ITouchable — two ITouchables cannot share a slot, since
   // RaycastTouchSource resolves a single GetComponentInParentsUntilBlock — but ContactLink
@@ -1434,6 +1690,16 @@ async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, font
     const names = [job.fields?.Name, job.fields?.Nickname]
       .filter(Boolean).map(plain).filter(Boolean);
     const texts = (f.layers || []).map(glyphBox);
+
+    /* The template's own button, if it drew one. Its ELEMENT box is wanted here rather than
+       the glyph box: on these templates that box is the drawn chip — its padding, its border,
+       its fill — and a collider cut to the letters alone would leave the button's edges dead
+       to the touch. */
+    (f.layers || []).forEach((L) => {
+      if (!TEMPLATE_BUTTON.test((L.text || '').replace(/\s+/g, ' ').trim())) return;
+      out.push({ x: L.x, y: L.y, w: L.w, h: L.h, what: 'button (template)', drawn: true });
+    });
+
     if (names.length) {
       (f.layers || []).forEach((L, i) => {
         if (!names.includes(plain(L.text))) return;
@@ -1483,12 +1749,21 @@ async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, font
         Mass:D(0.1), CharacterCollider:false, IgnoreRaycasts:false }).comp,
       touch.comp, link.comp ];
     const kids = [];
+    /* The chip's artwork, when this target is one we drew. It sits at the depth the card's own
+       graphics use rather than the overlay's, so it reads as printed on the card instead of
+       floating a millimetre off it — with its collider still in front, where a finger meets it
+       first. Always on, so it is a button you can see. */
+    if (t.art)
+      kids.push(pf.makeSlot('Chip',
+        texturedQuad(t.art, { w:t.w, h:t.h, queue:Q_OVERLAY, ownFlip:UNDER_PX }),
+        [0, 0, -(GFX_Z-CONTACT_Z)]));
     // The overlay is a plain textured quad — no UIX on the card. It sits in front of the
     // card's own text, starts inactive, and a ValueDriver turns it on straight from
     // TouchButton.IsHovering: no ProtoFlux, so a card works on its own away from a dispenser.
     if (t.overlay) {
+      const lb = t.label || { w:t.w, h:t.h };
       const ov = pf.makeSlot('Add contact (on hover)',
-        texturedQuad(t.overlay, { w:t.w, h:t.h, queue:Q_OVERLAY, ownFlip:UNDER_PX }),
+        texturedQuad(t.overlay, { w:lb.w, h:lb.h, queue:Q_OVERLAY, ownFlip:UNDER_PX }),
         [0, 0, -(OVERLAY_Z-CONTACT_Z)]);
       ov.Active.Data = false;
       kids.push(ov);
@@ -1500,25 +1775,57 @@ async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, font
   };
 
   const contacts = { front: contactTargets('front'), back: faces.back ? contactTargets('back') : [] };
+  /* Only the FRONT decides whether a chip is drawn. The VR profile back carries an "ADD FRIEND"
+     that its front does not, and counting that would leave the side you actually hand someone
+     with no button on it. Every drawn button on either face is made to work regardless. */
+  const drawnByTemplate = contacts.front.some(t => t.drawn);
 
-  // Hover overlays, in the card's own accent and typeface. Optional: with no renderer the
-  // targets still work, they just carry no label on hover.
+  // the typeface the card spends the most area in, so anything we draw matches its voice
+  const byArea = new Map();
+  for (const f of Object.values(faces)) for (const L of f.layers || [])
+    byArea.set(`${L.family}|${L.weight}`, (byArea.get(`${L.family}|${L.weight}`) ?? 0) + L.w * L.h);
+  const [fam, wgt] = ([...byArea].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'Lexend|500').split('|');
+  // .bytes, not the record: this used to hand the whole { bytes, variable } across, which
+  // stringifies to "[object Object]" inside the data: URL, so the face never loaded and the
+  // overlay quietly fell back to a system font.
+  // Baked cards embed no typeface, so there are no bytes to hand the label — the renderer
+  // falls back to the face the page already has, which is the one the card is drawn in.
+  const face = (overlayFor || contactButton) && theme
+    ? (bake ? { bytes: null } : await fontFor(fam, +wgt)) : null;
+  const ink = theme ? inkFor(theme.accentRGB, theme) : null;
+
+  /* The drawn chip, for the templates that did not draw their own. Front only — one button per
+     card is the point, and the front is the side that greets you. Where it goes is worked out
+     from the face's own measurements, so no template has to reserve a spot and none has to be
+     edited when a new one is added. */
+  let badge = null;
+  if (contactButton && theme && !drawnByTemplate) {
+    const b = badgeBox(faces.front, { spot: contactButton.spot, extra: contacts.front });
+    badge = { ...b, what: 'button' };
+    contacts.front.push(badge);
+    badge.art = await contactButton.render({ w:b.w, h:b.h, plate: theme.accent, ink,
+                                             fontBytes: face?.bytes ?? null, family: fam });
+    if (b.over)
+      log('     ! the front had no clear corner for the add-contact button, so it sits over ' +
+          'the card\'s artwork — drag it where you want it in world, or turn it off under Resonite.');
+  }
+
+  /* Hover overlays, in the card's own accent and typeface. Optional: with no renderer the
+     targets still work, they just carry no label on hover.
+
+     Sized to a LABEL rather than to the target. The overlay used to span whatever it covered,
+     which on a name run is about right and on a profile picture is a plate the size of the
+     photo — hovering the avatar blanked half the card behind a slab reading "Add contact".
+     A capped pill centred in the target says the same thing without hiding the card. */
   if (overlayFor && theme) {
-    const ink = inkFor(theme.accentRGB, theme);
     const plate = `rgba(${theme.accentRGB.join(',')},0.93)`;
-    // the typeface the card spends the most area in, so the overlay matches its voice
-    const byArea = new Map();
-    for (const f of Object.values(faces)) for (const L of f.layers || [])
-      byArea.set(`${L.family}|${L.weight}`, (byArea.get(`${L.family}|${L.weight}`) ?? 0) + L.w * L.h);
-    const [fam, wgt] = ([...byArea].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'Lexend|500').split('|');
-    // .bytes, not the record: this used to hand the whole { bytes, variable } across, which
-    // stringifies to "[object Object]" inside the data: URL, so the face never loaded and the
-    // overlay quietly fell back to a system font.
-    // Baked cards embed no typeface, so there are no bytes to hand the label — the renderer
-    // falls back to the face the page already has, which is the one the card is drawn in.
-    const face = bake ? { bytes: null } : await fontFor(fam, +wgt);
-    for (const side of Object.keys(contacts)) for (const t of contacts[side])
-      t.overlay = await overlayFor({ w:t.w, h:t.h, plate, ink, fontBytes:face.bytes, family:fam });
+    for (const side of Object.keys(contacts)) for (const t of contacts[side]) {
+      if (t.art) continue;                      // the chip already says what it does
+      const lw = Math.min(t.w, Math.max(PX_W * 0.26, 64));
+      t.label = { w: lw, h: Math.min(t.h, Math.max(lw / 3.2, 20)) };
+      t.overlay = await overlayFor({ w:t.label.w, h:t.label.h, plate, ink,
+                                     fontBytes:face.bytes, family:fam });
+    }
   }
 
   /* Every raster the tree references, hashed before the tree is built.
@@ -1534,7 +1841,10 @@ async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, font
     // baked draws no separate graphics, so none were rendered to hash
     if (!bake) (faces[side].gfx || []).forEach((_, i) => pngs.push(imageFor('gfx', side, i)));
   }
-  for (const side of Object.keys(contacts)) for (const t of contacts[side]) if (t.overlay) pngs.push(t.overlay);
+  for (const side of Object.keys(contacts)) for (const t of contacts[side]) {
+    if (t.overlay) pngs.push(t.overlay);
+    if (t.art) pngs.push(t.art);
+  }
   const hashes = new Map();
   for (const p of pngs) if (!hashes.has(p)) hashes.set(p, await sha256(p));
   const hashOf = (p) => {
@@ -1617,7 +1927,7 @@ async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, font
   if (noPic.length)
     log(`     ! no profile picture on the ${noPic.join(' and ')} — the add-contact ` +
                 `target is the empty placeholder frame. Import or upload an avatar for a real one.`);
-  return { root, CARD_W, CARD_H, S, fonts, noPic, touchReport, userIdFields,
+  return { root, CARD_W, CARD_H, S, fonts, noPic, touchReport, userIdFields, badge, drawnByTemplate,
          dilations: [...textMats.keys()].map(Number).sort((a,b)=>a-b) };
 }
 
@@ -1883,6 +2193,7 @@ for (const n of nodes) {
 
 
 
+
 const hexToRGB = (h) => { const s = String(h || '').replace('#', '');
   const n = s.length === 3 ? [...s].map(c => c + c) : (s.match(/../g) || ['77', '55', 'cc']);
   return n.slice(0, 3).map(v => parseInt(v, 16)); };
@@ -1897,14 +2208,20 @@ const safeName = (s) => (String(s || '').trim().replace(/[^A-Za-z0-9._-]+/g, '-'
  * @param onProgress  (step, detail) for a status line; every step is a network-free local
  *                    operation except 'fonts'
  * @param withOverlay draw the hover label on each add-contact target
+ * @param addContact  put a visible "Add contact" button on the card. Templates that drew one of
+ *                    their own have it made to work instead of getting a second one.
+ * @param contactSpot which corner it takes — 'auto' finds the emptiest one
  * @param bake        merge the card's artwork into one texture per side instead of rebuilding
  *                    it as editable elements. Needs no typefaces, so it makes no requests.
  */
 async function exportResonite({ fields = {}, template = 'Card', bake = false,
                                        dispenser = true, backing = 'rounded', backingColour = null,
-                                       icon = 'auto', onProgress = () => {}, withOverlay = true } = {}) {
+                                       icon = 'auto', onProgress = () => {}, withOverlay = true,
+                                       addContact = true, contactSpot = 'auto' } = {}) {
   if (dispenser && !BACKINGS[backing])
     throw new Error(`unknown backing "${backing}" — one of ${Object.keys(BACKINGS).join(', ')}`);
+  if (addContact && !BADGE_SPOTS.includes(contactSpot))
+    throw new Error(`unknown contactSpot "${contactSpot}" — one of ${BADGE_SPOTS.join(', ')}`);
   const notes = [];
   const log = (m) => { notes.push(String(m).trim()); onProgress('note', String(m).trim()); };
 
@@ -1955,16 +2272,20 @@ async function exportResonite({ fields = {}, template = 'Card', bake = false,
 
   const job = { template, faces, fields };
 
-  let theme = null, overlayFor = null;
-  if (withOverlay) {
-    theme = await cardTheme(imageFor('bg', 'front'), job);
-    overlayFor = (o) => renderOverlay(o);
-  }
+  /* Always read, not only when something asks for it: the hover label, the add-contact chip and
+     the dispenser's own face are all drawn in the card's colours, and reading them costs one
+     pass over a raster that is already in memory. */
+  const theme = await cardTheme(imageFor('bg', 'front'), job);
+  const overlayFor = withOverlay ? ((o) => renderOverlay(o)) : null;
+  const contactButton = addContact
+    ? { spot: contactSpot,
+        render: (o) => renderContactBadge({ ...o, icon: resolveIcon('auto', job) }) }
+    : null;
 
   onProgress('build', 'laying out the card in world');
   const { pf, asset, assets, embeds } = newEncoder();
   const card = await cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, fontFor,
-                                theme, overlayFor, userId: '', bake, log });
+                                theme, overlayFor, contactButton, userId: '', bake, log });
   /* The dispenser wraps the very same card. Its template ships with UserId EMPTY and the
      graph fills it in once, from whoever is HOLDING the dispenser — never from whoever presses
      it, so a stranger pressing your dispenser gets your card rather than becoming its owner.
@@ -1999,6 +2320,10 @@ async function exportResonite({ fields = {}, template = 'Card', bake = false,
       widthMM: +(card.CARD_W * 1000).toFixed(1), heightMM: +(card.CARD_H * 1000).toFixed(1),
       fonts: card.fonts.size, embedded: embeds.length, bytes: result.bytes.length,
       contacts: card.touchReport.length, noPicture: card.noPic, notes, baked: bake, dispenser,
+      // where the add-contact button ended up, or that the template had already drawn one
+      contactButton: card.drawnByTemplate ? { spot: 'template' }
+        : card.badge ? { spot: card.badge.spot, x: card.badge.x, y: card.badge.y,
+                         w: card.badge.w, h: card.badge.h, over: !!card.badge.over } : null,
     },
   };
 }

@@ -33,6 +33,7 @@ const FILES = [
   './capture.mjs',
   './encoder.mjs',
   './button.mjs',
+  '../badge.mjs',
   '../scene.mjs',
   '../instancer.mjs',
   './export.mjs',
