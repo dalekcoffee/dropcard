@@ -115,8 +115,19 @@ const DILATE_PER_100 = 0.05;
 const dilateFor = (weight, variable) =>
   variable ? Math.max(0, (weight - 400)) / 100 * DILATE_PER_100 : 0;
 
+/* bake: merge the card's own artwork into the plate instead of rebuilding it.
+ *
+ * Standard keeps every element separate — each text run is a live TextRenderer and each graphic
+ * its own quad — so the card can be edited in world. Baked hands over the face as it was drawn:
+ * one texture per side, nothing to take apart. imageFor must supply a plate rendered with the
+ * text and graphics VISIBLE for that to be true, which is the browser capture's 'baked' mode.
+ *
+ * What is not visual stays either way: the links, the add-contact targets and the shields are
+ * colliders, and baking artwork is no reason to stop the card working. It also means a baked
+ * export needs no typefaces at all — nothing draws glyphs — so it makes no network requests. */
 export async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, fontFor,
-                                overlayFor = null, theme = null, userId = '', log = () => {} }) {
+                                overlayFor = null, theme = null, userId = '', bake = false,
+                                log = () => {} }) {
   const faces = job.faces;
   const PX_W = faces.front.card.w, PX_H = faces.front.card.h;
   const S = LONG_EDGE / Math.max(PX_W, PX_H);
@@ -125,7 +136,7 @@ export async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha25
   const D = pf.D;
 
   const wanted = new Map();
-  for (const s of Object.keys(faces)) for (const L of faces[s].layers) wanted.set(`${L.family}|${L.weight}`, L);
+  if (!bake) for (const s of Object.keys(faces)) for (const L of faces[s].layers) wanted.set(`${L.family}|${L.weight}`, L);
   const fonts = new Map(), isVariable = new Map();
   for (const [k, L] of wanted) {
     const { bytes, variable } = await fontFor(L.family, L.weight);
@@ -322,7 +333,9 @@ export async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha25
     // .bytes, not the record: this used to hand the whole { bytes, variable } across, which
     // stringifies to "[object Object]" inside the data: URL, so the face never loaded and the
     // overlay quietly fell back to a system font.
-    const face = await fontFor(fam, +wgt);
+    // Baked cards embed no typeface, so there are no bytes to hand the label — the renderer
+    // falls back to the face the page already has, which is the one the card is drawn in.
+    const face = bake ? { bytes: null } : await fontFor(fam, +wgt);
     for (const side of Object.keys(contacts)) for (const t of contacts[side])
       t.overlay = await overlayFor({ w:t.w, h:t.h, plate, ink, fontBytes:face.bytes, family:fam });
   }
@@ -384,8 +397,9 @@ export async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha25
     const kids = [ pf.makeSlot('Background',
       texturedQuad(imageFor('bg', side),
         { w:CARD_W, h:CARD_H, queue:Q_PLATE, ownFlip:ON_THE_FACE }), [0,0,0]) ];
-    if (f.gfx?.length)   kids.push(px('Graphics', f.gfx.map(gfxSlot(side))));
-    if (f.layers.length) kids.push(px('Text', f.layers.map(textSlot)));
+    // baked: the plate already carries both, so rebuilding them would double them up
+    if (!bake && f.gfx?.length)   kids.push(px('Graphics', f.gfx.map(gfxSlot(side))));
+    if (!bake && f.layers.length) kids.push(px('Text', f.layers.map(textSlot)));
     if (f.links?.length) kids.push(px('Links', f.links.map(linkSlot)));
     const ct = contacts[side];
     if (ct.length) { touchReport.push(...ct.map(t => ({ side, ...t })));

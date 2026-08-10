@@ -72,15 +72,22 @@ const styleText = (cs, def) => {
   return text;
 };
 
+// every family named anywhere in a computed font-family stack, lowercased and unquoted
+const noteFamilies = (cs, into) => {
+  for (const f of (cs.fontFamily || '').split(','))
+    into.add(f.trim().replace(/^["']|["']$/g, '').toLowerCase());
+};
+
 // `cloneNode` does not carry ::before / ::after, and the rules that would recreate them are
 // gone too — only @font-face survives into the clone. Icon fonts live entirely in those
 // pseudo-elements, so without this every glyph on the card silently vanishes: the avatar
 // placeholder, the social chips, the decorative marks. Each one becomes a real span.
-function addPseudos(src, dst, doc, probe) {
+function addPseudos(src, dst, doc, probe, families) {
   for (const which of ['::before', '::after']) {
     const cs = getComputedStyle(src, which);
     const raw = cs.content;
     if (!raw || raw === 'none' || raw === 'normal') continue;
+    noteFamilies(cs, families);      // icon fonts live only here
     const span = doc.createElement('span');
     span.setAttribute('style', styleText(cs, defaultsFor('span', null, probe)) + ';content:normal;');
     // a computed `content` is a quoted string, possibly with \XXXX escapes for a glyph
@@ -91,31 +98,50 @@ function addPseudos(src, dst, doc, probe) {
   }
 }
 
-function inlineStyles(src, dst, doc, probe) {
+function inlineStyles(src, dst, doc, probe, families) {
   const cs = getComputedStyle(src);
+  noteFamilies(cs, families);
   if (dst.nodeType === 1 && dst.tagName)
     dst.setAttribute('style', styleText(cs, defaultsFor(dst.tagName.toLowerCase(), src.namespaceURI, probe)));
   const sk = src.children, dk = dst.children;
-  for (let i = 0; i < sk.length && i < dk.length; i++) inlineStyles(sk[i], dk[i], doc, probe);
-  if (dst.nodeType === 1) addPseudos(src, dst, doc, probe);   // after, so indices stay aligned
+  for (let i = 0; i < sk.length && i < dk.length; i++) inlineStyles(sk[i], dk[i], doc, probe, families);
+  if (dst.nodeType === 1) addPseudos(src, dst, doc, probe, families);   // after, so indices stay aligned
 }
 
-const asDataURI = async (url, mime) => {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`${r.status} fetching ${url}`);
-  const buf = new Uint8Array(await r.arrayBuffer());
-  let bin = ''; for (const b of buf) bin += String.fromCharCode(b);
-  return `data:${mime || r.headers.get('content-type') || 'application/octet-stream'};base64,${btoa(bin)}`;
+/* One export rasterises a dozen times — two plates, every graphic, an overlay per contact
+   target — and each of those inlines the same handful of font files and images. Fetching and
+   base64-ing them once per export rather than once per raster is most of the difference
+   between a slow export and a quick one, and none of these can change while it runs. */
+const uriCache = new Map();
+const asDataURI = (url, mime) => {
+  if (!uriCache.has(url)) uriCache.set(url, (async () => {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`${r.status} fetching ${url}`);
+    const buf = new Uint8Array(await r.arrayBuffer());
+    let bin = ''; for (let i = 0; i < buf.length; i += 0x8000)
+      bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    return `data:${mime || r.headers.get('content-type') || 'application/octet-stream'};base64,${btoa(bin)}`;
+  })().catch((e) => { uriCache.delete(url); throw e; }));
+  return uriCache.get(url);
 };
 
-// Every @font-face the document has loaded, re-declared with its file inlined. Without this
-// the clone falls back to a system face and every glyph shifts.
-async function inlineFonts(doc) {
+/* The @font-face rules THIS SUBTREE uses, re-declared with their files inlined. Without them
+   the clone falls back to a system face and every glyph shifts.
+ *
+ * Only the families actually named in the clone's computed styles. dropcard declares every
+ * typeface it offers plus a full icon font, and inlining the lot put ~9MB of base64 into each
+ * SVG — enough that the image simply stopped decoding once anything else was added, which is
+ * how the hover overlay came to fail while the card itself squeaked through. A card uses two
+ * to four faces; those are the ones that matter, and skipping the rest takes the payload down
+ * by well over an order of magnitude. */
+async function inlineFonts(doc, families) {
   const seen = new Map();
   for (const sheet of doc.styleSheets) {
     let rules; try { rules = sheet.cssRules; } catch { continue; }   // cross-origin sheet
     for (const rule of rules ?? []) {
       if (rule.constructor.name !== 'CSSFontFaceRule') continue;
+      const fam = rule.style.getPropertyValue('font-family').trim().replace(/^["']|["']$/g, '').toLowerCase();
+      if (!families.has(fam)) continue;
       const key = rule.cssText;
       if (seen.has(key)) continue;
       const m = /url\((['"]?)(https?:[^)'"]+)\1\)/.exec(rule.style.getPropertyValue('src'));
@@ -166,7 +192,8 @@ export async function rasterise(el, { scale = 2, hide = () => false } = {}) {
     }
   })(el, clone);
   const probe = makeProbe(doc);
-  try { inlineStyles(el, clone, doc, probe); } finally { probe.frame.remove(); }
+  const families = new Set();
+  try { inlineStyles(el, clone, doc, probe, families); } finally { probe.frame.remove(); }
   // Descendants keep no visibility of their own — a computed `visible` matches the tag default
   // and so is never written out — which leaves them inheriting the hidden they sit under.
   for (const n of clone.querySelectorAll('[data-dc-hidden]')) {
@@ -174,7 +201,7 @@ export async function rasterise(el, { scale = 2, hide = () => false } = {}) {
     n.removeAttribute('data-dc-hidden');
   }
   await inlineImages(clone);
-  const fontCss = await inlineFonts(doc);
+  const fontCss = await inlineFonts(doc, families);
 
   // The element's own box becomes the viewport, so its position on the page is irrelevant —
   // but it must stay POSITIONED. Dropping to `static` hands every absolutely-positioned
