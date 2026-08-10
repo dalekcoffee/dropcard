@@ -40,10 +40,35 @@ def sub(old, new, why, count=1):
     print(f"  ✓ {why}")
 
 
+def rename(old, new, why):
+    """A rename the design project may have already made.
+
+    Unlike sub(), this one is allowed to find nothing — the point of the step is that the
+    templates end up saying "add contact", and an export where they already do has satisfied it.
+    Failing there would block every future export for having taken the fix upstream, which is
+    backwards. What it will not tolerate is finding NEITHER wording: that means the button was
+    renamed to something the exporter cannot recognise, and the card would ship with a button
+    that does nothing.
+    """
+    global tpl
+    n = tpl.count(old)
+    if n:
+        tpl = tpl.replace(old, new)
+        print(f"  ✓ {why} ({n})")
+        return
+    have = tpl.count(new)
+    if not have:
+        sys.exit(f"{why}: found neither {old!r} nor {new!r}.\n"
+                 f"  If a template's add-contact button was renamed, the exporter needs to be able\n"
+                 f"  to find it: label it 'Add contact' (or 'Add friend'), or mark the element with\n"
+                 f"  a data-dc-contact attribute, which works whatever it says.")
+    print(f"  · {why} — already says so in the export ({have})")
+
+
 # ── 1. the buttons the templates already drew ────────────────────────────────
-sub("['ADD FRIEND','INVITE']", "['ADD CONTACT','INVITE']",
-    "VR nameplate and VR profile back say add contact", count=2)
-sub("'Add Friend'", "'Add contact'", "VR social says add contact")
+rename("['ADD FRIEND','INVITE']", "['ADD CONTACT','INVITE']",
+       "VR nameplate and VR profile back say add contact")
+rename("'Add Friend'", "'Add contact'", "VR social says add contact")
 
 # ── 2. the rail tab ──────────────────────────────────────────────────────────
 sub("""  { id:'Links',   name:'Links',   icon:'ph ph-link',            title:'Socials, tip jars and sites' },""",

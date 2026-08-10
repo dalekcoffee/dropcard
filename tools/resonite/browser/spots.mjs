@@ -50,12 +50,18 @@ for (let i = 0; i < names.length; i++) {
   const r = await p.evaluate(async () => {
     const { measureFace } = await import('/tools/resonite/browser/capture.mjs');
     const { badgeBox } = await import('/tools/resonite/badge.mjs');
+    // the builder's own rule, so this sweep cannot disagree with it about which templates
+    // already have a button
+    const { drewOwnButton, TEMPLATE_BUTTON } = await import('/tools/resonite/scene.mjs');
     const el = document.getElementById('oshi-front-node');
     if (!el) return { error: 'no front node' };
     const { data } = measureFace(el);
-    const drawn = (data.layers || []).filter(L => /^add\s*(friend|contact)$/i.test((L.text || '').trim()))
-      .map(L => ({ x: L.x, y: L.y, w: L.w, h: L.h }));
-    if (drawn.length) return { drawn, card: data.card };
+    if (drewOwnButton(data)) {
+      const drawn = [...(data.marks || []),
+                     ...(data.layers || []).filter(L => TEMPLATE_BUTTON.test((L.text || '').trim()))]
+        .map(L => ({ x: L.x, y: L.y, w: L.w, h: L.h }));
+      return { drawn, card: data.card };
+    }
     const box = badgeBox(data, { spot: 'auto' });
     // what it sits on: text is a failure, decoration is only worth reporting
     const hit = (a, o) => a.x < o.x + o.w && o.x < a.x + a.w && a.y < o.y + o.h && o.y < a.y + a.h;

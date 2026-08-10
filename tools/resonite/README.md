@@ -56,6 +56,29 @@ added. The name and the profile picture stay targets either way.
 `browser/spots.mjs` sweeps the whole picker and fails if any template ends up with the button
 over its text or links. Run it after touching `badge.mjs` or any template's layout.
 
+#### Designing the button in the design project
+
+The drawn chip is a **fallback**, not the intended look for every card. A template that prints
+its own button always wins, and that button is designed where the rest of the card is designed —
+in the design project, with the template's own type, colour and shape. Nothing here has to
+change to add one, and no list has to be updated.
+
+Two ways to make one, both authored entirely in the template's markup:
+
+| | |
+| --- | --- |
+| **Label it** | An element whose own text is `Add contact` (any case; `Add friend` still matches, for cards made before this). |
+| **Mark it** | Any element carrying `data-dc-contact`, whatever it says — `h('div', {'data-dc-contact':'', …}, 'Say hi')`. Use this for an icon-only button, or a label in another language. |
+
+Either way the collider is cut to **that element's own box**, padding and border included, so
+give the attribute to the button itself rather than to the text inside it. Put one on a face and
+that face's chip disappears; the front decides whether a chip is drawn at all, so a button on the
+back does not leave the front without one.
+
+What stays in this repo: the fallback chip's own design (`browser/button.mjs`,
+`buildContactBadge`) and where it lands (`badge.mjs`). Those are not reachable from the design
+project.
+
 `bundle.mjs` flattens those into `browser/dropcard-resonite.js`, which
 `tools/patch/05_resonite_export.py` inlines into `index.html`. **Re-run the bundler before
 patching** or the site ships a stale export.

@@ -144,6 +144,22 @@ export function measureFace(root) {
     rasterBoxes[gfxEls.length - 1] = { x: x0 - L.x, y: y0 - L.y, w: x1 - x0, h: y1 - y0 };
   });
 
+  /* Buttons the template has MARKED as its add-contact button.
+   *
+   * A template that prints one is found by its label — "Add contact" — which needs no knowledge
+   * of any of this to work. `data-dc-contact` is the way out for a button that says something
+   * else: "Say hi", a bare icon, a card that speaks Japanese. Whatever carries the attribute
+   * becomes the target, cut to that element's own box.
+   *
+   * The templates are authored in a design project, away from this repo, so the contract has to
+   * be something that can be written there and nothing more. An attribute is that; a build step
+   * or an import would not be. */
+  const marks = [...root.querySelectorAll('[data-dc-contact]')].map(e => {
+    const r = e.getBoundingClientRect();
+    return { x: r.x - R.x, y: r.y - R.y, w: r.width, h: r.height,
+             label: (e.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 24) };
+  }).filter(m => m.w > 8 && m.h > 8);
+
   /* The avatar region, whether or not a picture was set. A real avatar is an <img>; with none,
      templates draw a placeholder icon-font glyph (ph-user) inside the frame, and the FRAME is
      what we want — the glyph is only 82px inside a 282x250 box. */
@@ -175,7 +191,7 @@ export function measureFace(root) {
     }
   }
 
-  return { data: { card: { w: R.width, h: R.height }, layers, links, gfx, avatar },
+  return { data: { card: { w: R.width, h: R.height }, layers, links, gfx, avatar, marks },
            textEls, gfxEls, rasterBoxes };
 }
 

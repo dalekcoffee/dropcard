@@ -33,6 +33,18 @@ fix and calling Google on every page load again.
 | `06_link_urls.py` | an absolute link value is the href; Misskey fields peel to a handle | Bug fix |
 | `07_resonite_panel.py` | a Resonite rail tab; every template's card gets an add-contact button | Panel + template wording |
 
+### If you redesign the add-contact buttons in the design project
+
+Step 07 renames the templates' printed `ADD FRIEND` buttons to `ADD CONTACT`. That rename is
+**allowed to find nothing** — an export that already says "add contact" has satisfied it and the
+step says so rather than failing. What it will not accept is finding neither wording, because
+that means the button was renamed to something the exporter cannot recognise and the card would
+ship with a button that does nothing.
+
+Giving more templates a button needs no change here at all: the exporter finds any element
+labelled "Add contact", or any element carrying `data-dc-contact`. See
+`tools/resonite/README.md` → *Designing the button in the design project*.
+
 ## It fails loudly on purpose
 
 Every edit is an exact-string match with a count assertion. If the design project moves the

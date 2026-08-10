@@ -72,7 +72,10 @@ export const slackFor = L => isSingleLine(L) ? Math.max(6, L.fontPx * 0.9) : 0;
    Exported because the preview and the placement sweep have to agree with the builder about
    which templates already have one — three copies of this rule would eventually disagree. */
 export const TEMPLATE_BUTTON = /^add\s*(friend|contact)$/i;
+/* …or an element the template marked with data-dc-contact, which is the way to give a button a
+   label the matcher would not recognise. Captured by capture.mjs as `marks`. */
 export const drewOwnButton = (face) =>
+  (face.marks || []).length > 0 ||
   (face.layers || []).some(L => TEMPLATE_BUTTON.test((L.text || '').replace(/\s+/g, ' ').trim()));
 
 // ── FACING ──────────────────────────────────────────────────────────────────
@@ -325,6 +328,11 @@ export async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha25
     (f.layers || []).forEach((L) => {
       if (!TEMPLATE_BUTTON.test((L.text || '').replace(/\s+/g, ' ').trim())) return;
       out.push({ x: L.x, y: L.y, w: L.w, h: L.h, what: 'button (template)', drawn: true });
+    });
+    // and anything it marked explicitly, whatever the button happens to say
+    (f.marks || []).forEach((m) => {
+      if (out.some(o => hit(o, m))) return;          // already found by its label
+      out.push({ x: m.x, y: m.y, w: m.w, h: m.h, what: 'button (marked)', drawn: true });
     });
 
     if (names.length) {
