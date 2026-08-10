@@ -3,7 +3,9 @@
 Build tools that turn a rendered dropcard into a `.resonitepackage` — a two-sided card you
 can drag into [Resonite](https://resonite.com), plus a dispenser that hands out copies.
 
-Not part of the site build. `index.html` ships without any of this.
+The site does this itself now — *Export for Resonite* builds the package in the page. What is
+here is the same construction (`scene.mjs`, shared by both), plus the Node driver, the dispenser
+builder, and the harnesses that keep the two honest.
 
 ## Running it
 
@@ -28,14 +30,35 @@ are invisible in a render and only show up once the card is in front of you in V
 
 | | |
 | --- | --- |
-| `DROPCARD_FONTS=cdn\|repo` | where font bytes come from; `cdn` gives truer weights |
+| `DROPCARD_FONTS=cdn\|repo` | where font bytes come from; `cdn` gives truer weights, `repo` is what the browser uses |
 | `DROPCARD_USERID=U-…` | bake a contact id in for testing, instead of leaving it blank |
 | `--backing=rounded\|square\|circle\|none` | the dispenser button's shape |
 | `--icon=landscape\|vertical\|auto`, `--backing-color=`, `--icon-color=` | its art and colours |
 
-`browser/` holds the dependency-free port — `pack.mjs` writes a package using only browser
-primitives, `raster.mjs` rasterises the card in-page, and `selftest.mjs` / `compare.mjs` check
-each against the Node output. Not wired into the site yet.
+## What the site runs
+
+`browser/` is the in-page path, using nothing a browser lacks: `pack.mjs` (BSON, a Brotli
+stream, a zip, SHA-256), `raster.mjs`, `capture.mjs`, `fonts.mjs`, `overlay.mjs`,
+`encoder.mjs`, `export.mjs` and `ui.mjs`. The card itself is built by `scene.mjs`, which the
+Node driver uses too — there is one construction, not two.
+
+`bundle.mjs` flattens those into `browser/dropcard-resonite.js`, which
+`tools/patch/05_resonite_export.py` inlines into `index.html`. **Re-run the bundler before
+patching** or the site ships a stale export.
+
+Four harnesses, in the order they are worth running:
+
+| | |
+| --- | --- |
+| `browser/selftest.mjs` | `pack.mjs` round-trips against the Node encoder |
+| `browser/parity.mjs` | the same scene through both encoders decodes to identical BSON |
+| `browser/compare.mjs` | the in-page raster against Playwright's, pixel by pixel |
+| `browser/e2e.mjs [--bundle]` | export from a real tab, then `verify.mjs` the bytes |
+
+`../patch/test_resonite_button.mjs` goes further and drives the shipped menu.
+
+Browser egress is blocked in some sandboxes, so `e2e.mjs` serves the font host through Node.
+Only that hop is stood in for; everything downstream is the real path.
 
 ## Provenance
 

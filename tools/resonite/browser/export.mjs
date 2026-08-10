@@ -11,13 +11,8 @@ import { captureCard } from './capture.mjs';
 import { fontLoader } from './fonts.mjs';
 import { cardTheme, renderOverlay } from './overlay.mjs';
 import { newEncoder } from './encoder.mjs';
-import { inkFor } from '../colour.mjs';
+import { sha256 } from './pack.mjs';
 import { cardRoot, TV } from '../scene.mjs';
-
-const sha256 = async (bytes) => {
-  const h = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('');
-};
 
 const safeName = (s) => (String(s || '').trim().replace(/[^A-Za-z0-9._-]+/g, '-')
   .replace(/^-+|-+$/g, '') || 'dropcard');

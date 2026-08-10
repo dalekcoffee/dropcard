@@ -350,7 +350,8 @@ export async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha25
   for (const side of Object.keys(faces)) {
     if (!faces[side]) continue;
     pngs.push(imageFor('bg', side));
-    (faces[side].gfx || []).forEach((_, i) => pngs.push(imageFor('gfx', side, i)));
+    // baked draws no separate graphics, so none were rendered to hash
+    if (!bake) (faces[side].gfx || []).forEach((_, i) => pngs.push(imageFor('gfx', side, i)));
   }
   for (const side of Object.keys(contacts)) for (const t of contacts[side]) if (t.overlay) pngs.push(t.overlay);
   const hashes = new Map();

@@ -17,7 +17,12 @@ import pkg from '/opt/node22/lib/node_modules/playwright/index.js'; const { chro
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
-const TEMPLATES = process.argv.slice(2).length ? process.argv.slice(2)
+/* --bundle exercises browser/dropcard-resonite.js — the flattened script the app actually
+   carries — instead of the module graph. Both are worth running: the modules are what gets
+   edited, the bundle is what ships, and only the second can catch a flattening fault. */
+const BUNDLED = process.argv.includes('--bundle');
+const args = process.argv.slice(2).filter(a => a !== '--bundle');
+const TEMPLATES = args.length ? args
   : ['Editorial|Landscape', 'Editorial|Landscape|baked', 'Trading Card|Portrait'];
 const FONT_HOST = 'raw.githubusercontent.com';
 
@@ -38,6 +43,8 @@ await p.route(`**://${FONT_HOST}/**`, async (route) => {
 
 await p.goto('http://127.0.0.1:8899/index.html', { waitUntil: 'load', timeout: 90000 });
 await p.waitForTimeout(9000);
+if (BUNDLED) await p.addScriptTag({ path: new URL('./dropcard-resonite.js', import.meta.url).pathname });
+console.log(BUNDLED ? 'using the flattened bundle' : 'using the ES modules');
 
 mkdirSync(new URL('../out/', import.meta.url), { recursive: true });
 let failed = 0;
@@ -49,8 +56,8 @@ for (const spec of TEMPLATES) {
   await p.locator(`button:has-text("${template}")`).first().click(); await p.waitForTimeout(1400);
 
   const t0 = Date.now(); fontHits = 0;
-  const out = await p.evaluate(async ([template, bake]) => {
-    const m = await import('/tools/resonite/browser/export.mjs');
+  const out = await p.evaluate(async ([template, bake, bundled]) => {
+    const m = bundled ? window.dropcardResonite : await import('/tools/resonite/browser/export.mjs');
     const steps = [];
     try {
       const { blob, filename, report } = await m.exportResonite({
@@ -58,7 +65,7 @@ for (const spec of TEMPLATES) {
         onProgress: (s, d) => steps.push(`${s}: ${d}`) });
       return { ok: true, bytes: [...new Uint8Array(await blob.arrayBuffer())], filename, report, steps };
     } catch (e) { return { ok: false, error: String(e && e.stack || e), steps }; }
-  }, [template, bake]).catch(e => ({ ok: false, error: String(e), steps: [] }));
+  }, [template, bake, BUNDLED]).catch(e => ({ ok: false, error: String(e), steps: [] }));
 
   if (!out.ok) {
     failed++;
