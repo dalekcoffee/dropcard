@@ -153,23 +153,51 @@ async function inlineFonts(doc, families) {
   return [...seen.values()].join('\n');
 }
 
-async function inlineImages(root) {
+async function inlineImages(root, missed) {
   await Promise.all([...root.querySelectorAll('img')].map(async (img) => {
     if (!img.src || img.src.startsWith('data:')) return;
     try { img.setAttribute('src', await asDataURI(img.src)); }
-    catch { img.removeAttribute('src'); }
+    catch { missed?.add(img.src); img.removeAttribute('src'); }
+  }));
+}
+
+/* Pictures reach a card through CSS as often as through <img>.
+ *
+ * The avatar is the one that matters: the templates paint it as a `background-image` on a div,
+ * not as an <img>, so inlining <img> src attributes alone left the frame empty on every
+ * imported card. The clone is sealed and cannot fetch, so any url() still pointing at the
+ * network simply does not draw.
+ *
+ * A cross-origin fetch is the limit here. Displaying a remote image needs no permission, but
+ * READING its bytes does, so a media host that sends no access-control-allow-origin cannot be
+ * copied into the card at all. Those URLs are collected rather than swallowed, so the export
+ * can say whose picture it could not take. */
+async function inlineCssUrls(root, missed) {
+  const nodes = [root, ...root.querySelectorAll('*')];
+  await Promise.all(nodes.map(async (n) => {
+    const style = n.getAttribute && n.getAttribute('style');
+    if (!style || !/url\(\s*['"]?https?:/i.test(style)) return;
+    const urls = [...new Set([...style.matchAll(/url\(\s*(['"]?)(https?:[^)'"]+)\1\s*\)/gi)].map(m => m[2]))];
+    let out = style;
+    for (const u of urls) {
+      try { out = out.split(u).join(await asDataURI(u)); }
+      catch { missed?.add(u); }
+    }
+    n.setAttribute('style', out);
   }));
 }
 
 /**
  * @param el       the element to rasterise
  * @param scale    device pixels per CSS pixel (2 matches the Playwright capture)
+ * @param missed   optional Set; URLs whose bytes could not be read (a host that allows the
+ *                 picture to be shown but not copied) are added to it
  * @param hide     predicate: elements it returns true for are made invisible in the clone,
  *                 which is how the plate is captured without its text and graphics.
  *                 They keep their boxes — see the note at the marking pass below.
  * @returns {Promise<Uint8Array>} PNG bytes with a transparent background
  */
-export async function rasterise(el, { scale = 2, hide = () => false } = {}) {
+export async function rasterise(el, { scale = 2, hide = () => false, missed = null } = {}) {
   const doc = el.ownerDocument;
   const rect = el.getBoundingClientRect();
   const w = Math.round(rect.width), h = Math.round(rect.height);
@@ -200,7 +228,8 @@ export async function rasterise(el, { scale = 2, hide = () => false } = {}) {
     n.setAttribute('style', (n.getAttribute('style') || '') + ';visibility:hidden;');
     n.removeAttribute('data-dc-hidden');
   }
-  await inlineImages(clone);
+  await inlineImages(clone, missed);
+  await inlineCssUrls(clone, missed);
   const fontCss = await inlineFonts(doc, families);
 
   // The element's own box becomes the viewport, so its position on the page is irrelevant —

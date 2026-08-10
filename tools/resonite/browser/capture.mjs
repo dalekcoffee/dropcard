@@ -38,12 +38,30 @@ function tightBox(el, R) {
   return { x: x0 - R.x, y: y0 - R.y, w: x1 - x0, h: y1 - y0 };
 }
 
+/** Every family+weight the card sets text in, before anything is measured or drawn. */
+export function scanFamilies(root) {
+  const out = new Map();
+  const note = (cs) => {
+    const fam = (cs.fontFamily.split(',')[0] || '').trim().replace(/^["']|["']$/g, '');
+    if (!fam || /^(system-ui|sans-serif|serif|monospace)$/i.test(fam)) return;
+    out.set(`${fam}|${parseInt(cs.fontWeight) || 400}`, { family: fam, weight: parseInt(cs.fontWeight) || 400 });
+  };
+  (function walk(el) {
+    for (const c of el.children) {
+      const own = [...c.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+      if (own && !c.closest('svg')) note(getComputedStyle(c));
+      walk(c);
+    }
+  })(root);
+  return [...out.values()];
+}
+
 /**
  * Measure one face and rasterise its plate and graphics.
  * @param root  the card face element (#oshi-front-node / #oshi-back-node)
  * @param scale device pixels per CSS pixel; 2 matches what the Node capture produces
  */
-export async function captureFace(root, { scale = 2, bake = false } = {}) {
+export async function captureFace(root, { scale = 2, bake = false, missed = null } = {}) {
   const R = root.getBoundingClientRect();
   const layers = [], gfxEls = [], textEls = [];
 
@@ -99,10 +117,18 @@ export async function captureFace(root, { scale = 2, bake = false } = {}) {
      templates draw a placeholder icon-font glyph (ph-user) inside the frame, and the FRAME is
      what we want — the glyph is only 82px inside a 282x250 box. */
   let avatar = null;
-  const img = [...root.querySelectorAll('img')]
-    .map(e => ({ e, r: e.getBoundingClientRect() }))
-    .filter(o => o.r.width > 24 && o.r.height > 24)
-    .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height)[0];
+  /* A picture on a card is usually NOT an <img>: the templates paint the avatar as a
+     background-image on a div so they can crop and filter it. Looking only for <img> meant an
+     imported card reported no photo at all, so it got no add-contact target on the picture —
+     and fell through to the placeholder branch, which then found nothing either because the
+     placeholder is not drawn when there IS a photo. */
+  const pictures = [...root.querySelectorAll('img, div, span')]
+    .map(e => ({ e, r: e.getBoundingClientRect(),
+                 real: e.tagName === 'IMG' ? !!e.currentSrc || !!e.src
+                     : /^url\(/i.test(getComputedStyle(e).backgroundImage || '') }))
+    .filter(o => o.real && o.r.width > 24 && o.r.height > 24)
+    .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height);
+  const img = pictures[0];
   if (img) {
     avatar = { x: img.r.x - R.x, y: img.r.y - R.y, w: img.r.width, h: img.r.height, hasImage: true };
   } else {
@@ -124,9 +150,9 @@ export async function captureFace(root, { scale = 2, bake = false } = {}) {
      The measurements are taken either way: baked still uses them to place the add-contact
      targets, which are colliders rather than artwork. */
   const hidden = new Set([...textEls, ...gfxEls]);
-  const bg = await rasterise(root, { scale, hide: bake ? undefined : (n => hidden.has(n)) });
+  const bg = await rasterise(root, { scale, missed, hide: bake ? undefined : (n => hidden.has(n)) });
   const gfxPngs = [];
-  if (!bake) for (const e of gfxEls) gfxPngs.push(await rasterise(e, { scale }));
+  if (!bake) for (const e of gfxEls) gfxPngs.push(await rasterise(e, { scale, missed }));
 
   return { data: { card: { w: R.width, h: R.height }, layers, links, gfx, avatar }, bg, gfxPngs };
 }
@@ -135,12 +161,12 @@ export async function captureFace(root, { scale = 2, bake = false } = {}) {
  * Both faces plus the field values the builder needs to recognise the name run.
  * @param fields  { Name, Nickname } as the card is currently showing them
  */
-export async function captureCard(fields, { scale = 2, bake = false } = {}) {
+export async function captureCard(fields, { scale = 2, bake = false, missed = null } = {}) {
   const faces = {}, rasters = {};
   for (const side of ['front', 'back']) {
     const el = document.getElementById(`oshi-${side}-node`);
     if (!el) continue;
-    const { data, bg, gfxPngs } = await captureFace(el, { scale, bake });
+    const { data, bg, gfxPngs } = await captureFace(el, { scale, bake, missed });
     faces[side] = data;
     rasters[`bg|${side}`] = bg;
     gfxPngs.forEach((p, i) => { rasters[`gfx|${side}|${i}`] = p; });

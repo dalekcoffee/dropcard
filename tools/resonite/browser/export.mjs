@@ -7,41 +7,12 @@
 // Node build runs), and encode it (encoder.mjs over pack.mjs). Nothing is uploaded; the only
 // requests are for the font files, and they go to the Google Fonts repository.
 
-import { captureCard } from './capture.mjs';
+import { captureCard, scanFamilies } from './capture.mjs';
 import { fontLoader } from './fonts.mjs';
 import { cardTheme, renderOverlay } from './overlay.mjs';
 import { newEncoder } from './encoder.mjs';
 import { sha256 } from './pack.mjs';
 import { cardRoot, TV } from '../scene.mjs';
-
-/* Is this family actually resolving, or is the browser quietly substituting?
- *
- * NOT document.fonts.check — that answers true for a family it has never heard of, on the
- * grounds that an unknown name is a system font it should assume exists. Measuring is the
- * reliable way: set the text in `"Family", <generic>` and compare against the generic alone.
- * If a real face is resolving, the widths differ for at least one generic. */
-const familyAvailable = (() => {
-  const GENERICS = ['monospace', 'serif', 'sans-serif'];
-  const SAMPLE = 'MWmwiI0Oo@—llB';    // wide and narrow glyphs, so a substitution shows up
-  let ctx = null, base = null, cache = new Map();
-  return (family) => {
-    if (cache.has(family)) return cache.get(family);
-    try {
-      if (!ctx) {
-        ctx = document.createElement('canvas').getContext('2d');
-        base = {};
-        for (const g of GENERICS) { ctx.font = `72px ${g}`; base[g] = ctx.measureText(SAMPLE).width; }
-      }
-      let real = false;
-      for (const g of GENERICS) {
-        ctx.font = `72px "${family}", ${g}`;
-        if (Math.abs(ctx.measureText(SAMPLE).width - base[g]) > 0.5) { real = true; break; }
-      }
-      cache.set(family, real);
-      return real;
-    } catch { return true; }          // can't tell — say nothing rather than warn wrongly
-  };
-})();
 
 const safeName = (s) => (String(s || '').trim().replace(/[^A-Za-z0-9._-]+/g, '-')
   .replace(/^-+|-+$/g, '') || 'dropcard');
@@ -61,28 +32,52 @@ export async function exportResonite({ fields = {}, template = 'Card', bake = fa
   const notes = [];
   const log = (m) => { notes.push(String(m).trim()); onProgress('note', String(m).trim()); };
 
-  onProgress('capture', 'reading the card');
-  const { faces, imageFor } = await captureCard(fields, { bake });
-  if (!faces.front) throw new Error('no front face on the page to export');
-
-  if (!bake) onProgress('fonts', 'fetching the typefaces');
   const fontFor = fontLoader(log);
-  const job = { template, faces, fields };
 
-  /* Google Fonts are off until the user turns them on, so most previews are drawn in a system
-     fallback while the template still NAMES its intended family. The export embeds that family
-     — it is the only one we can fetch, and it is what the template was designed in — which
-     means the card in world can legitimately look better than the card on screen. Worth saying
-     out loud rather than leaving as a surprise. */
+  /* Load the real typefaces into the PAGE before measuring anything.
+   *
+   * Every text run is exported with the box the browser laid it out in, and is then rebuilt in
+   * world using the font we embed. If the page was showing a system fallback — which it is by
+   * default, since Google Fonts stay off until asked — those two disagree, and a line that just
+   * fitted on screen wraps in world: "Animal" comes back as "Anima" above a lone "l".
+   *
+   * Registering the fetched faces under the names the CSS already asks for makes the measurement
+   * and the export the same font. It costs no extra request, since those bytes are needed for
+   * the package anyway, and it corrects the preview at the same time — so what is on screen is
+   * what lands in world. */
   if (!bake) {
-    const missing = [...new Set(Object.values(faces).flatMap(f => (f.layers || []).map(L => L.family)))]
-      .filter(fam => fam && !/^(system-ui|sans-serif|serif|monospace|ui-|-apple)/i.test(fam))
-      .filter(fam => !familyAvailable(fam));
-    if (missing.length)
-      log(`Your preview is using a system face, but the card will be built in ` +
-          `${missing.slice(0, 3).join(', ')}. Turn on Google Fonts under Style to see it as it ` +
-          `will look.`);
+    onProgress('fonts', 'fetching the typefaces');
+    const wanted = [];
+    for (const side of ['front', 'back']) {
+      const el = document.getElementById(`oshi-${side}-node`);
+      if (!el) continue;
+      for (const f of scanFamilies(el))
+        if (!wanted.some(w => w.family === f.family && w.weight === f.weight)) wanted.push(f);
+    }
+    await Promise.all(wanted.map(async ({ family, weight }) => {
+      try {
+        const { bytes } = await fontFor(family, weight);
+        const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        const face = new FontFace(family, buf, { weight: String(weight) });
+        await face.load();
+        document.fonts.add(face);
+      } catch { /* fontFor logs a substitution; the capture then falls back as it used to */ }
+    }));
+    try { await document.fonts.ready; } catch { /* not fatal */ }
+    // two frames, so the relayout the new faces cause is done before anything is measured
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
   }
+
+  onProgress('capture', 'reading the card');
+  const missed = new Set();
+  const { faces, imageFor } = await captureCard(fields, { bake, missed });
+  if (!faces.front) throw new Error('no front face on the page to export');
+  if (missed.size)
+    log(`Could not copy ${missed.size === 1 ? 'an image' : missed.size + ' images'} into the card — ` +
+        `the server hosting ${missed.size === 1 ? 'it' : 'them'} does not allow it to be read. ` +
+        `Uploading your avatar under Details embeds it properly.`);
+
+  const job = { template, faces, fields };
 
   let theme = null, overlayFor = null;
   if (withOverlay) {

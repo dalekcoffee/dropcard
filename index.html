@@ -801,23 +801,51 @@ async function inlineFonts(doc, families) {
   return [...seen.values()].join('\n');
 }
 
-async function inlineImages(root) {
+async function inlineImages(root, missed) {
   await Promise.all([...root.querySelectorAll('img')].map(async (img) => {
     if (!img.src || img.src.startsWith('data:')) return;
     try { img.setAttribute('src', await asDataURI(img.src)); }
-    catch { img.removeAttribute('src'); }
+    catch { missed?.add(img.src); img.removeAttribute('src'); }
+  }));
+}
+
+/* Pictures reach a card through CSS as often as through <img>.
+ *
+ * The avatar is the one that matters: the templates paint it as a `background-image` on a div,
+ * not as an <img>, so inlining <img> src attributes alone left the frame empty on every
+ * imported card. The clone is sealed and cannot fetch, so any url() still pointing at the
+ * network simply does not draw.
+ *
+ * A cross-origin fetch is the limit here. Displaying a remote image needs no permission, but
+ * READING its bytes does, so a media host that sends no access-control-allow-origin cannot be
+ * copied into the card at all. Those URLs are collected rather than swallowed, so the export
+ * can say whose picture it could not take. */
+async function inlineCssUrls(root, missed) {
+  const nodes = [root, ...root.querySelectorAll('*')];
+  await Promise.all(nodes.map(async (n) => {
+    const style = n.getAttribute && n.getAttribute('style');
+    if (!style || !/url\(\s*['"]?https?:/i.test(style)) return;
+    const urls = [...new Set([...style.matchAll(/url\(\s*(['"]?)(https?:[^)'"]+)\1\s*\)/gi)].map(m => m[2]))];
+    let out = style;
+    for (const u of urls) {
+      try { out = out.split(u).join(await asDataURI(u)); }
+      catch { missed?.add(u); }
+    }
+    n.setAttribute('style', out);
   }));
 }
 
 /**
  * @param el       the element to rasterise
  * @param scale    device pixels per CSS pixel (2 matches the Playwright capture)
+ * @param missed   optional Set; URLs whose bytes could not be read (a host that allows the
+ *                 picture to be shown but not copied) are added to it
  * @param hide     predicate: elements it returns true for are made invisible in the clone,
  *                 which is how the plate is captured without its text and graphics.
  *                 They keep their boxes — see the note at the marking pass below.
  * @returns {Promise<Uint8Array>} PNG bytes with a transparent background
  */
-async function rasterise(el, { scale = 2, hide = () => false } = {}) {
+async function rasterise(el, { scale = 2, hide = () => false, missed = null } = {}) {
   const doc = el.ownerDocument;
   const rect = el.getBoundingClientRect();
   const w = Math.round(rect.width), h = Math.round(rect.height);
@@ -848,7 +876,8 @@ async function rasterise(el, { scale = 2, hide = () => false } = {}) {
     n.setAttribute('style', (n.getAttribute('style') || '') + ';visibility:hidden;');
     n.removeAttribute('data-dc-hidden');
   }
-  await inlineImages(clone);
+  await inlineImages(clone, missed);
+  await inlineCssUrls(clone, missed);
   const fontCss = await inlineFonts(doc, families);
 
   // The element's own box becomes the viewport, so its position on the page is irrelevant —
@@ -1123,12 +1152,30 @@ function tightBox(el, R) {
   return { x: x0 - R.x, y: y0 - R.y, w: x1 - x0, h: y1 - y0 };
 }
 
+/** Every family+weight the card sets text in, before anything is measured or drawn. */
+function scanFamilies(root) {
+  const out = new Map();
+  const note = (cs) => {
+    const fam = (cs.fontFamily.split(',')[0] || '').trim().replace(/^["']|["']$/g, '');
+    if (!fam || /^(system-ui|sans-serif|serif|monospace)$/i.test(fam)) return;
+    out.set(`${fam}|${parseInt(cs.fontWeight) || 400}`, { family: fam, weight: parseInt(cs.fontWeight) || 400 });
+  };
+  (function walk(el) {
+    for (const c of el.children) {
+      const own = [...c.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
+      if (own && !c.closest('svg')) note(getComputedStyle(c));
+      walk(c);
+    }
+  })(root);
+  return [...out.values()];
+}
+
 /**
  * Measure one face and rasterise its plate and graphics.
  * @param root  the card face element (#oshi-front-node / #oshi-back-node)
  * @param scale device pixels per CSS pixel; 2 matches what the Node capture produces
  */
-async function captureFace(root, { scale = 2, bake = false } = {}) {
+async function captureFace(root, { scale = 2, bake = false, missed = null } = {}) {
   const R = root.getBoundingClientRect();
   const layers = [], gfxEls = [], textEls = [];
 
@@ -1184,10 +1231,18 @@ async function captureFace(root, { scale = 2, bake = false } = {}) {
      templates draw a placeholder icon-font glyph (ph-user) inside the frame, and the FRAME is
      what we want — the glyph is only 82px inside a 282x250 box. */
   let avatar = null;
-  const img = [...root.querySelectorAll('img')]
-    .map(e => ({ e, r: e.getBoundingClientRect() }))
-    .filter(o => o.r.width > 24 && o.r.height > 24)
-    .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height)[0];
+  /* A picture on a card is usually NOT an <img>: the templates paint the avatar as a
+     background-image on a div so they can crop and filter it. Looking only for <img> meant an
+     imported card reported no photo at all, so it got no add-contact target on the picture —
+     and fell through to the placeholder branch, which then found nothing either because the
+     placeholder is not drawn when there IS a photo. */
+  const pictures = [...root.querySelectorAll('img, div, span')]
+    .map(e => ({ e, r: e.getBoundingClientRect(),
+                 real: e.tagName === 'IMG' ? !!e.currentSrc || !!e.src
+                     : /^url\(/i.test(getComputedStyle(e).backgroundImage || '') }))
+    .filter(o => o.real && o.r.width > 24 && o.r.height > 24)
+    .sort((a, b) => b.r.width * b.r.height - a.r.width * a.r.height);
+  const img = pictures[0];
   if (img) {
     avatar = { x: img.r.x - R.x, y: img.r.y - R.y, w: img.r.width, h: img.r.height, hasImage: true };
   } else {
@@ -1209,9 +1264,9 @@ async function captureFace(root, { scale = 2, bake = false } = {}) {
      The measurements are taken either way: baked still uses them to place the add-contact
      targets, which are colliders rather than artwork. */
   const hidden = new Set([...textEls, ...gfxEls]);
-  const bg = await rasterise(root, { scale, hide: bake ? undefined : (n => hidden.has(n)) });
+  const bg = await rasterise(root, { scale, missed, hide: bake ? undefined : (n => hidden.has(n)) });
   const gfxPngs = [];
-  if (!bake) for (const e of gfxEls) gfxPngs.push(await rasterise(e, { scale }));
+  if (!bake) for (const e of gfxEls) gfxPngs.push(await rasterise(e, { scale, missed }));
 
   return { data: { card: { w: R.width, h: R.height }, layers, links, gfx, avatar }, bg, gfxPngs };
 }
@@ -1220,12 +1275,12 @@ async function captureFace(root, { scale = 2, bake = false } = {}) {
  * Both faces plus the field values the builder needs to recognise the name run.
  * @param fields  { Name, Nickname } as the card is currently showing them
  */
-async function captureCard(fields, { scale = 2, bake = false } = {}) {
+async function captureCard(fields, { scale = 2, bake = false, missed = null } = {}) {
   const faces = {}, rasters = {};
   for (const side of ['front', 'back']) {
     const el = document.getElementById(`oshi-${side}-node`);
     if (!el) continue;
-    const { data, bg, gfxPngs } = await captureFace(el, { scale, bake });
+    const { data, bg, gfxPngs } = await captureFace(el, { scale, bake, missed });
     faces[side] = data;
     rasters[`bg|${side}`] = bg;
     gfxPngs.forEach((p, i) => { rasters[`gfx|${side}|${i}`] = p; });
@@ -1836,35 +1891,6 @@ async function cardRoot({ pf, asset, assets, embeds, job, imageFor, sha256, font
 
 
 
-/* Is this family actually resolving, or is the browser quietly substituting?
- *
- * NOT document.fonts.check — that answers true for a family it has never heard of, on the
- * grounds that an unknown name is a system font it should assume exists. Measuring is the
- * reliable way: set the text in `"Family", <generic>` and compare against the generic alone.
- * If a real face is resolving, the widths differ for at least one generic. */
-const familyAvailable = (() => {
-  const GENERICS = ['monospace', 'serif', 'sans-serif'];
-  const SAMPLE = 'MWmwiI0Oo@—llB';    // wide and narrow glyphs, so a substitution shows up
-  let ctx = null, base = null, cache = new Map();
-  return (family) => {
-    if (cache.has(family)) return cache.get(family);
-    try {
-      if (!ctx) {
-        ctx = document.createElement('canvas').getContext('2d');
-        base = {};
-        for (const g of GENERICS) { ctx.font = `72px ${g}`; base[g] = ctx.measureText(SAMPLE).width; }
-      }
-      let real = false;
-      for (const g of GENERICS) {
-        ctx.font = `72px "${family}", ${g}`;
-        if (Math.abs(ctx.measureText(SAMPLE).width - base[g]) > 0.5) { real = true; break; }
-      }
-      cache.set(family, real);
-      return real;
-    } catch { return true; }          // can't tell — say nothing rather than warn wrongly
-  };
-})();
-
 const safeName = (s) => (String(s || '').trim().replace(/[^A-Za-z0-9._-]+/g, '-')
   .replace(/^-+|-+$/g, '') || 'dropcard');
 
@@ -1883,28 +1909,52 @@ async function exportResonite({ fields = {}, template = 'Card', bake = false,
   const notes = [];
   const log = (m) => { notes.push(String(m).trim()); onProgress('note', String(m).trim()); };
 
-  onProgress('capture', 'reading the card');
-  const { faces, imageFor } = await captureCard(fields, { bake });
-  if (!faces.front) throw new Error('no front face on the page to export');
-
-  if (!bake) onProgress('fonts', 'fetching the typefaces');
   const fontFor = fontLoader(log);
-  const job = { template, faces, fields };
 
-  /* Google Fonts are off until the user turns them on, so most previews are drawn in a system
-     fallback while the template still NAMES its intended family. The export embeds that family
-     — it is the only one we can fetch, and it is what the template was designed in — which
-     means the card in world can legitimately look better than the card on screen. Worth saying
-     out loud rather than leaving as a surprise. */
+  /* Load the real typefaces into the PAGE before measuring anything.
+   *
+   * Every text run is exported with the box the browser laid it out in, and is then rebuilt in
+   * world using the font we embed. If the page was showing a system fallback — which it is by
+   * default, since Google Fonts stay off until asked — those two disagree, and a line that just
+   * fitted on screen wraps in world: "Animal" comes back as "Anima" above a lone "l".
+   *
+   * Registering the fetched faces under the names the CSS already asks for makes the measurement
+   * and the export the same font. It costs no extra request, since those bytes are needed for
+   * the package anyway, and it corrects the preview at the same time — so what is on screen is
+   * what lands in world. */
   if (!bake) {
-    const missing = [...new Set(Object.values(faces).flatMap(f => (f.layers || []).map(L => L.family)))]
-      .filter(fam => fam && !/^(system-ui|sans-serif|serif|monospace|ui-|-apple)/i.test(fam))
-      .filter(fam => !familyAvailable(fam));
-    if (missing.length)
-      log(`Your preview is using a system face, but the card will be built in ` +
-          `${missing.slice(0, 3).join(', ')}. Turn on Google Fonts under Style to see it as it ` +
-          `will look.`);
+    onProgress('fonts', 'fetching the typefaces');
+    const wanted = [];
+    for (const side of ['front', 'back']) {
+      const el = document.getElementById(`oshi-${side}-node`);
+      if (!el) continue;
+      for (const f of scanFamilies(el))
+        if (!wanted.some(w => w.family === f.family && w.weight === f.weight)) wanted.push(f);
+    }
+    await Promise.all(wanted.map(async ({ family, weight }) => {
+      try {
+        const { bytes } = await fontFor(family, weight);
+        const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        const face = new FontFace(family, buf, { weight: String(weight) });
+        await face.load();
+        document.fonts.add(face);
+      } catch { /* fontFor logs a substitution; the capture then falls back as it used to */ }
+    }));
+    try { await document.fonts.ready; } catch { /* not fatal */ }
+    // two frames, so the relayout the new faces cause is done before anything is measured
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
   }
+
+  onProgress('capture', 'reading the card');
+  const missed = new Set();
+  const { faces, imageFor } = await captureCard(fields, { bake, missed });
+  if (!faces.front) throw new Error('no front face on the page to export');
+  if (missed.size)
+    log(`Could not copy ${missed.size === 1 ? 'an image' : missed.size + ' images'} into the card — ` +
+        `the server hosting ${missed.size === 1 ? 'it' : 'them'} does not allow it to be read. ` +
+        `Uploading your avatar under Details embeds it properly.`);
+
+  const job = { template, faces, fields };
 
   let theme = null, overlayFor = null;
   if (withOverlay) {
