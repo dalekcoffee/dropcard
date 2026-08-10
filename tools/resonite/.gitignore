@@ -7,3 +7,6 @@ out/
 package-lock.json
 *_browser.resonitepackage
 cmp-*.png
+
+# A stray copy of the app, if you ever serve or patch from in here
+/index.html
